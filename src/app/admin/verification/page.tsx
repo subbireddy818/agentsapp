@@ -6,6 +6,7 @@ import {
   ArrowRight, ShieldCheck, Eye, Loader2, Award 
 } from "lucide-react";
 import { supabase } from "@/lib/supabase";
+import { getVerificationRequests, approveBrokerAction, rejectBrokerAction } from "./actions";
 
 interface BrokerRequest {
   id: string;
@@ -34,22 +35,11 @@ export default function VerificationQueue() {
   async function loadRequests() {
     setLoading(true);
     try {
-      // Fetch all agent profiles
-      const { data: profiles, error } = await supabase
-        .from("profiles")
-        .select("*")
-        .eq("role", "agent")
-        .order("created_at", { ascending: false });
-
-      if (profiles) {
-        // Fetch referrals to match referredBy
-        const { data: referrals } = await supabase
-          .from("referrals")
-          .select("referred_phone, referrer_id, profiles(cp_id)");
-
-        const mapped: BrokerRequest[] = profiles.map((p: any) => {
+      const res = await getVerificationRequests();
+      if (res.success && res.profiles) {
+        const mapped: BrokerRequest[] = res.profiles.map((p: any) => {
           // Find referral match
-          const matchingRef = referrals?.find(r => r.referred_phone === p.phone);
+          const matchingRef = res.referrals?.find(r => r.referred_phone === p.phone);
           const referredBy = matchingRef?.profiles ? (matchingRef.profiles as any).cp_id : null;
 
           // Default mock docs since files aren't stored in base tables
@@ -94,59 +84,17 @@ export default function VerificationQueue() {
   const filteredRequests = requests.filter(r => r.status === activeTab);
 
   const handleApprove = async (id: string, name: string) => {
-    const generatedId = `CP-${Math.floor(1000 + Math.random() * 9000)}`;
     setLoading(true);
-
     try {
-      // 1. Update Broker status in profiles to approved and assign CP ID
-      const { error: profileError } = await supabase
-        .from("profiles")
-        .update({
-          status: "approved",
-          cp_id: generatedId
-        })
-        .eq("id", id);
-
-      if (profileError) throw profileError;
-
-      // 2. Fetch the profile details to check if they were referred
       const currentReq = requests.find(r => r.id === id);
-      
-      // 3. Query referrals table to find match
-      const { data: referral, error: referralGetError } = await supabase
-        .from("referrals")
-        .select("*")
-        .eq("referred_phone", currentReq?.phone)
-        .eq("status", "pending")
-        .single();
+      if (!currentReq) throw new Error("Request not found");
 
-      if (referral) {
-        // Update referral record in database
-        await supabase
-          .from("referrals")
-          .update({
-            status: "approved",
-            points_awarded: 500
-          })
-          .eq("id", referral.id);
-
-        // Fetch referrer's current points
-        const { data: referrer, error: referrerError } = await supabase
-          .from("profiles")
-          .select("*")
-          .eq("id", referral.referrer_id)
-          .single();
-
-        if (referrer) {
-          const newPoints = (referrer.points || 0) + 500;
-          
-          // Add 500 XP to referrer points
-          await supabase
-            .from("profiles")
-            .update({ points: newPoints })
-            .eq("id", referrer.id);
-        }
+      const res = await approveBrokerAction(id, currentReq.phone, name);
+      if (!res.success) {
+        throw new Error(res.error || "Approval failed on server");
       }
+
+      const generatedId = res.generatedId || "";
 
       // 4. Send live WhatsApp approval message using GallaBox API
       if (currentReq?.phone) {
@@ -194,22 +142,10 @@ export default function VerificationQueue() {
     setLoading(true);
 
     try {
-      // 1. Update Broker status to rejected in profiles
-      const { error: profileError } = await supabase
-        .from("profiles")
-        .update({
-          status: "rejected",
-          rejection_reason: rejectReason
-        })
-        .eq("id", selectedRequest.id);
-
-      if (profileError) throw profileError;
-
-      // 2. Update referral record if match exists
-      await supabase
-        .from("referrals")
-        .update({ status: "rejected" })
-        .eq("referred_phone", selectedRequest.phone);
+      const res = await rejectBrokerAction(selectedRequest.id, selectedRequest.phone, rejectReason);
+      if (!res.success) {
+        throw new Error(res.error || "Rejection failed on server");
+      }
 
       // 3. Send WhatsApp rejection notification using GallaBox API
       if (selectedRequest?.phone) {

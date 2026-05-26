@@ -40,20 +40,25 @@ export async function POST(req: NextRequest) {
     }
 
 
-    // Support both Meta WhatsApp Webhook and GallaBox Webhook payload formats
+    // Support Meta, GallaBox, and Simulator payload formats
     const textBody = (
+      payload.data?.message?.text?.body || // GallaBox standard
+      payload.data?.message?.text || // GallaBox alternative
       payload.entry?.[0]?.changes?.[0]?.value?.messages?.[0]?.text?.body || // Meta
-      payload.message?.text || // GallaBox
-      payload.message?.text?.body || // GallaBox alternative
+      payload.message?.text || // GallaBox legacy
+      payload.message?.text?.body || // GallaBox legacy alternative
       payload.payload?.message?.text || // GallaBox nested
       payload.text || // Sandbox/direct
       ""
     ).toString().trim();
 
     const fromPhoneRaw = (
+      payload.data?.contact?.phoneNumber || // GallaBox standard
+      payload.data?.contact?.phone || // GallaBox alternative
+      payload.data?.message?.from || // GallaBox nested message from
       payload.entry?.[0]?.changes?.[0]?.value?.messages?.[0]?.from || // Meta
-      payload.message?.from || // GallaBox
-      payload.payload?.message?.from || // GallaBox nested
+      payload.message?.from || // GallaBox legacy
+      payload.payload?.message?.from || // GallaBox legacy nested
       payload.from || // Sandbox/direct
       ""
     ).toString().trim();

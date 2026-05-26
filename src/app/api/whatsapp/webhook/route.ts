@@ -23,6 +23,7 @@ export async function GET(req: NextRequest) {
 
 // POST handler: Receives incoming chat prompts from brokers (Meta, GallaBox, or Simulator)
 export async function POST(req: NextRequest) {
+  let fromPhoneRaw = "";
   try {
     const payload = await req.json();
     console.log("WhatsApp Webhook Payload Received:", JSON.stringify(payload));
@@ -47,7 +48,9 @@ export async function POST(req: NextRequest) {
 
 
     // Support Meta, GallaBox, and Simulator payload formats
-    const textBody = (
+    let textBody = (
+      payload.whatsapp?.text?.body || // GallaBox whatsapp body
+      payload.whatsapp?.text || // GallaBox whatsapp text
       payload.data?.message?.text?.body || // GallaBox standard
       payload.data?.message?.text || // GallaBox alternative
       payload.entry?.[0]?.changes?.[0]?.value?.messages?.[0]?.text?.body || // Meta
@@ -58,7 +61,15 @@ export async function POST(req: NextRequest) {
       ""
     ).toString().trim();
 
-    const fromPhoneRaw = (
+    // Clean surrounding single/double quotes
+    if ((textBody.startsWith('"') && textBody.endsWith('"')) || (textBody.startsWith("'") && textBody.endsWith("'"))) {
+      textBody = textBody.slice(1, -1).trim();
+    }
+
+    fromPhoneRaw = (
+      payload.whatsapp?.from || // GallaBox whatsapp from
+      payload.whatsapp?.sender || // GallaBox whatsapp sender
+      payload.sender || // GallaBox sender
       payload.data?.contact?.phoneNumber || // GallaBox standard
       payload.data?.contact?.phone || // GallaBox alternative
       payload.data?.message?.from || // GallaBox nested message from
@@ -166,10 +177,18 @@ export async function POST(req: NextRequest) {
     if (!profile) {
       // Check if they want to register
       if (commandLower.startsWith("register") || commandLower.includes("register")) {
-        const match = commandText.match(/register\s+([a-zA-Z\s]+)\s+agency\s+(.*)/i);
+        const match = commandText.match(/register\s+(.+)\s+agency\s+(.*)/i);
         if (match) {
-          const regName = match[1].trim();
-          const regAgency = match[2].trim();
+          let regName = match[1].trim();
+          let regAgency = match[2].trim();
+
+          // Strip square brackets if the user typed them literally
+          if (regName.startsWith("[") && regName.endsWith("]")) {
+            regName = regName.slice(1, -1).trim();
+          }
+          if (regAgency.startsWith("[") && regAgency.endsWith("]")) {
+            regAgency = regAgency.slice(1, -1).trim();
+          }
           const generatedId = `CP-${Math.floor(1000 + Math.random() * 9000)}`;
 
           const { data: newProfile, error } = await supabase

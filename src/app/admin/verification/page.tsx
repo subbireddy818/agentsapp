@@ -148,6 +148,24 @@ export default function VerificationQueue() {
         }
       }
 
+      // 4. Send live WhatsApp approval message using GallaBox API
+      if (currentReq?.phone) {
+        try {
+          await fetch("/api/whatsapp/send", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json"
+            },
+            body: JSON.stringify({
+              phone: currentReq.phone,
+              text: `🎉 *Congratulations ${name}!* Your agentsapp Channel Partner verification has been approved. Your new CP ID is *${generatedId}*. Welcome aboard!`
+            })
+          });
+        } catch (err) {
+          console.error("Failed to send outbound GallaBox welcome notification:", err);
+        }
+      }
+
       setApproveSuccessId(generatedId);
       setSelectedRequest(null);
       
@@ -192,6 +210,24 @@ export default function VerificationQueue() {
         .from("referrals")
         .update({ status: "rejected" })
         .eq("referred_phone", selectedRequest.phone);
+
+      // 3. Send WhatsApp rejection notification using GallaBox API
+      if (selectedRequest?.phone) {
+        try {
+          await fetch("/api/whatsapp/send", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json"
+            },
+            body: JSON.stringify({
+              phone: selectedRequest.phone,
+              text: `❌ *Verification Update:* Your agentsapp broker verification was rejected.\n\n📝 Reason: *${rejectReason}*\n\nPlease log back in and upload the correct documents.`
+            })
+          });
+        } catch (err) {
+          console.error("Failed to send outbound GallaBox rejection notification:", err);
+        }
+      }
 
       setShowRejectModal(false);
       setRejectReason("");

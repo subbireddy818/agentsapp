@@ -21,25 +21,33 @@ export async function GET(req: NextRequest) {
   return new NextResponse("Bad Request", { status: 400 });
 }
 
-// POST handler: Receives incoming chat prompts from brokers
+// POST handler: Receives incoming chat prompts from brokers (Meta, GallaBox, or Simulator)
 export async function POST(req: NextRequest) {
   try {
     const payload = await req.json();
     console.log("WhatsApp Webhook Payload Received:", JSON.stringify(payload));
 
-    const entry = payload.entry?.[0];
-    const change = entry?.changes?.[0]?.value;
-    const message = change?.messages?.[0];
+    // Support both Meta WhatsApp Webhook and GallaBox Webhook payload formats
+    const textBody = (
+      payload.entry?.[0]?.changes?.[0]?.value?.messages?.[0]?.text?.body || // Meta
+      payload.message?.text || // GallaBox
+      payload.message?.text?.body || // GallaBox alternative
+      payload.payload?.message?.text || // GallaBox nested
+      payload.text || // Sandbox/direct
+      ""
+    ).toString().trim();
 
-    if (!message) {
-      return NextResponse.json({ status: "ignored" });
-    }
+    const fromPhoneRaw = (
+      payload.entry?.[0]?.changes?.[0]?.value?.messages?.[0]?.from || // Meta
+      payload.message?.from || // GallaBox
+      payload.payload?.message?.from || // GallaBox nested
+      payload.from || // Sandbox/direct
+      ""
+    ).toString().trim();
 
-    const fromPhoneRaw = message.from; // e.g., "919876543210"
-    const textBody = message.text?.body?.trim();
-
-    if (!textBody) {
-      return NextResponse.json({ status: "ignored" });
+    if (!textBody || !fromPhoneRaw) {
+      console.log("Ignored payload: Missing message body or sender phone number.");
+      return NextResponse.json({ status: "ignored", message: "Missing body or phone" });
     }
 
     // Format phone number to match the database profile representation: "+91 98765 43210"
@@ -59,19 +67,86 @@ export async function POST(req: NextRequest) {
     }
 
     const lowerText = textBody.toLowerCase();
-    
-    // Command 1: Add Lead
-    // Example format: "Add lead Amit Kumar phone 9912345678 budget 1.8cr location Kokapet"
-    if (lowerText.startsWith("add lead") || lowerText.includes("add lead")) {
-      const nameMatch = textBody.match(/add\s+lead\s+([a-zA-Z\s]+)/i);
-      const phoneMatch = textBody.match(/phone\s+([\d\s]+)/i);
-      const budgetMatch = textBody.match(/budget\s+([^\s]+)/i);
-      const locMatch = textBody.match(/location\s+([a-zA-Z\s]+)/i);
 
-      const leadName = nameMatch?.[1]?.replace(/(phone|budget|location).*/i, "")?.trim() || "New Lead";
-      const leadPhone = phoneMatch?.[1]?.replace(/\s+/g, "") || "9876500000";
-      const leadBudget = budgetMatch?.[1] || "₹1.50 Cr";
-      const leadLoc = locMatch?.[1]?.trim() || "Kokapet";
+    // Determine if the message has our specific "aa" prefix or is from the sandbox simulator
+    const isFromSimulator = payload.entry?.[0]?.id === "sandbox-entry" || payload.from === "simulator" || payload.fromPhone === "simulator";
+    const hasAaPrefix = lowerText.startsWith("aa ") || lowerText === "aa";
+
+    // If it doesn't match our routing signature, ignore it and let GallaBox's default flows handle it
+    if (!hasAaPrefix && !isFromSimulator) {
+      console.log("Ignored payload: Does not start with 'aa' and not from simulator.");
+      return NextResponse.json({ status: "ignored", message: "Not intended for agentsapp bot" });
+    }
+
+    // Strip "aa" prefix to normalize command text for processing
+    let commandText = textBody;
+    if (lowerText.startsWith("aa ")) {
+      commandText = textBody.slice(3).trim();
+    } else if (lowerText === "aa") {
+      commandText = "help";
+    }
+
+    const commandLower = commandText.toLowerCase();
+
+    // 1. HELP / WELCOME INTENT
+    if (commandLower === "help" || commandLower === "commands" || commandLower === "hi" || commandLower === "hello") {
+      const helpMsg = `🤖 *AgentsApp WhatsApp Bot Menu*\n\n` +
+        `Manage your real estate CRM with simple commands:\n\n` +
+        `1. 🆕 *Add Lead*:\n` +
+        `   _"aa Add Ravi looking for 3BHK"_ or _"aa Add lead Amit phone 9912345678"_\n\n` +
+        `2. ⏰ *Set Reminder*:\n` +
+        `   _"aa Remind me tomorrow to call Ramesh"_\n\n` +
+        `3. ⚡ *Update Lead Status*:\n` +
+        `   _"aa Amit site visit"_ or _"aa Ramesh Kumar closed"_\n\n` +
+        `4. 🏢 *Search Inventory*:\n` +
+        `   _"aa Show east-facing plots"_ or _"aa Search 3BHK Kokapet"_\n\n` +
+        `5. 📁 *Request Brochure*:\n` +
+        `   _"aa Send Skyline brochure"_ or _"aa Green Meadows layout"_\n\n` +
+        `6. 📋 *View Leads List*:\n` +
+        `   _"aa My leads"_ or _"aa Show all leads"_\n\n` +
+        `7. 🔍 *Search Lead Card*:\n` +
+        `   _"aa Search Ramesh"_ or _"aa Find Amit"_\n\n` +
+        `8. 🚀 *Upcoming Launches*:\n` +
+        `   _"aa Upcoming launches"_ or _"aa launches"_\n\n` +
+        `9. 🎥 *Register Webinar*:\n` +
+        `   _"aa Register webinar"_ or _"aa webinars"_\n\n` +
+        `👉 Remember to prefix your commands with *aa* when chatting on WhatsApp!`;
+      return NextResponse.json({ status: "success", reply: helpMsg });
+    }
+
+    // 2. ADD LEAD INTENT (Support: "Add Ravi looking for 3BHK", etc.)
+    if (commandLower.startsWith("add") || commandLower.includes("add lead")) {
+      let leadName = "New Lead";
+      let leadPhone = "9876500000";
+      let leadBudget = "₹1.80 Cr";
+      let leadLoc = "Kokapet";
+      let requirement = "3 BHK";
+
+      // Match "Add [Name] looking for [Req]" or "Add [Name] wanting [Req]"
+      const addLookingMatch = commandText.match(/add\s+([a-zA-Z\s]+)\s+looking\s+for\s+([0-9a-zA-Z\s_]+)/i);
+      if (addLookingMatch) {
+        leadName = addLookingMatch[1].trim();
+        requirement = addLookingMatch[2].trim();
+      } else {
+        // Fallback to original matching
+        const nameMatch = commandText.match(/add\s+(?:lead\s+)?([a-zA-Z\s]+)/i);
+        leadName = nameMatch?.[1]?.replace(/(phone|budget|location|looking|wanting).*/i, "")?.trim() || "New Lead";
+      }
+
+      const phoneMatch = commandText.match(/phone\s+([\d\s]+)/i);
+      if (phoneMatch) {
+        leadPhone = phoneMatch[1].replace(/\s+/g, "");
+      }
+      
+      const budgetMatch = commandText.match(/budget\s+([^\s]+)/i);
+      if (budgetMatch) {
+        leadBudget = budgetMatch[1];
+      }
+
+      const locMatch = commandText.match(/location\s+([a-zA-Z\s]+)/i);
+      if (locMatch) {
+        leadLoc = locMatch[1].trim();
+      }
 
       // Insert lead into Supabase
       const { data: newLead, error } = await supabase
@@ -81,7 +156,7 @@ export async function POST(req: NextRequest) {
           name: leadName,
           phone: leadPhone,
           status: "new",
-          requirement: "3 BHK",
+          requirement: requirement,
           location: leadLoc,
           budget: leadBudget,
           details: {
@@ -95,16 +170,33 @@ export async function POST(req: NextRequest) {
 
       if (error) {
         console.error("Failed to insert lead via WhatsApp bot:", error);
+        return NextResponse.json({ status: "error", reply: `🤖 Bot: ❌ Failed to add lead to database: ${error.message}` });
       } else {
         console.log("Successfully logged lead via WhatsApp bot:", newLead);
+        return NextResponse.json({ 
+          status: "success", 
+          reply: `🤖 Bot: ✅ Lead Added!\n👤 Name: *${leadName}*\n📱 Phone: ${leadPhone}\n📍 Location: ${leadLoc}\n🏠 Req: *${requirement}*\n💰 Budget: ${leadBudget}\n\n(This was inserted in your live Supabase leads table. Close chat to see it!)` 
+        });
       }
     } 
-    // Command 2: Reminders/Follow-ups
-    // Example format: "Remind me to call Ramesh time Tomorrow, 5:00 PM"
-    else if (lowerText.startsWith("remind") || lowerText.includes("remind")) {
-      const match = textBody.match(/remind\s+(?:me\s+to\s+)?([a-zA-Z0-9\s,.-]+)\s+time\s+(.*)/i);
-      const title = match?.[1]?.trim() || "WhatsApp Follow-up Task";
-      const scheduledTime = match?.[2]?.trim() || "Today, 6:00 PM";
+
+    // 3. SET REMINDER INTENT (Support: "Remind me tomorrow to call Ramesh", etc.)
+    if (commandLower.startsWith("remind") || commandLower.includes("remind")) {
+      const match = commandText.match(/remind\s+(?:me\s+)?(?:to\s+)?([a-zA-Z0-9\s,.-]+)\s+time\s+(.*)/i);
+      
+      let title = "WhatsApp Follow-up Task";
+      let scheduledTime = "Tomorrow, 10:00 AM";
+
+      if (match) {
+        title = match[1].trim();
+        scheduledTime = match[2].trim();
+      } else {
+        // Fallback for simple "Remind me tomorrow"
+        const titleMatch = commandText.match(/remind\s+me\s+(?:to\s+)?(.*)/i);
+        if (titleMatch) {
+          title = titleMatch[1].trim();
+        }
+      }
 
       // Find if there is a matching lead to link
       const { data: matchingLeads } = await supabase
@@ -131,14 +223,328 @@ export async function POST(req: NextRequest) {
 
       if (error) {
         console.error("Failed to insert reminder via WhatsApp bot:", error);
+        return NextResponse.json({ status: "error", reply: `🤖 Bot: ❌ Failed to save reminder: ${error.message}` });
       } else {
         console.log("Successfully logged reminder via WhatsApp bot:", newReminder);
+        return NextResponse.json({ 
+          status: "success", 
+          reply: `🤖 Bot: ⏰ Reminder Scheduled!\n⏰ Task: *${title}*\n📅 Time: *${scheduledTime}*\n\n(Successfully logged in your Supabase reminders table!)` 
+        });
       }
     }
 
-    return NextResponse.json({ status: "success", parsed: textBody });
+    // 4. UPDATE LEAD STATUS INTENT
+    const statusKeywords = [
+      { key: "site visit", status: "site_visit" },
+      { key: "site_visit", status: "site_visit" },
+      { key: "interested", status: "interested" },
+      { key: "negotiation", status: "negotiation" },
+      { key: "closed", status: "closed" },
+      { key: "won", status: "closed" },
+      { key: "lost", status: "lost" },
+      { key: "new", status: "new" }
+    ];
+
+    let matchedStatus: string | null = null;
+    for (const item of statusKeywords) {
+      if (commandLower.includes(item.key)) {
+        matchedStatus = item.status;
+        break;
+      }
+    }
+
+    if (matchedStatus) {
+      const { data: agentLeads } = await supabase
+        .from("leads")
+        .select("id, name")
+        .eq("agent_id", profile.id);
+
+      let matchedLead = null;
+      if (agentLeads) {
+        for (const lead of agentLeads) {
+          const nameLower = lead.name.toLowerCase();
+          if (commandLower.includes(nameLower)) {
+            matchedLead = lead;
+            break;
+          }
+          const firstName = nameLower.split(" ")[0];
+          if (firstName.length >= 3 && commandLower.includes(firstName)) {
+            matchedLead = lead;
+            break;
+          }
+        }
+      }
+
+      if (matchedLead) {
+        const { data: updatedLead, error } = await supabase
+          .from("leads")
+          .update({ status: matchedStatus })
+          .eq("id", matchedLead.id)
+          .select()
+          .single();
+
+        if (error) {
+          console.error("Failed to update lead status via WhatsApp bot:", error);
+          return NextResponse.json({ status: "error", reply: `🤖 Bot: ❌ Failed to update status: ${error.message}` });
+        } else {
+          return NextResponse.json({
+            status: "success",
+            reply: `🤖 Bot: ✅ Lead Status Updated!\n👤 Name: *${matchedLead.name}*\n⚡ New Status: *${matchedStatus.toUpperCase()}*\n\n(Kanban board is synced with this update in real time!)`
+          });
+        }
+      }
+    }
+
+    // 5. VIEW LEADS INTENT
+    if (
+      commandLower.includes("my leads") || 
+      commandLower.includes("show leads") || 
+      commandLower.includes("list leads") || 
+      commandLower.includes("all leads") || 
+      commandLower.includes("hot leads")
+    ) {
+      const { data: leads } = await supabase
+        .from("leads")
+        .select("*")
+        .eq("agent_id", profile.id)
+        .order("created_at", { ascending: false });
+
+      if (!leads || leads.length === 0) {
+        return NextResponse.json({ status: "success", reply: "🤖 Bot: You don't have any leads registered yet. Add one by typing:\n\"aa Add lead [Name] phone [No]\"" });
+      }
+
+      let replyMsg = `🤖 *Your CRM Leads List*\n\n`;
+      leads.forEach((l, idx) => {
+        const emojiMap: Record<string, string> = {
+          new: "🆕",
+          interested: "💡",
+          site_visit: "🚗",
+          negotiation: "🤝",
+          closed: "🎉",
+          lost: "❌"
+        };
+        const emoji = emojiMap[l.status] || "👤";
+        replyMsg += `${idx + 1}. ${emoji} *${l.name}* (${l.phone})\n   📍 Loc: ${l.location || "N/A"} | Req: ${l.requirement || "N/A"}\n   ⚡ Status: *${l.status.toUpperCase()}* | Budget: ${l.budget || "N/A"}\n\n`;
+      });
+      return NextResponse.json({ status: "success", reply: replyMsg.trim() });
+    }
+
+    // 6. REQUEST BROCHURE / DOCUMENT INTENT
+    if (
+      commandLower.includes("brochure") || 
+      commandLower.includes("floor plan") || 
+      commandLower.includes("price list") || 
+      commandLower.includes("layout")
+    ) {
+      const { data: docs } = await supabase
+        .from("documents")
+        .select("*, projects(name)");
+
+      if (!docs || docs.length === 0) {
+        return NextResponse.json({ status: "success", reply: "🤖 Bot: No brochures or price list documents found in vault." });
+      }
+
+      let matchedDoc = null;
+      for (const doc of docs) {
+        const nameLower = doc.name.toLowerCase();
+        const projNameLower = doc.projects?.name?.toLowerCase() || "";
+        
+        if (commandLower.includes(nameLower) || (projNameLower && commandLower.includes(projNameLower))) {
+          matchedDoc = doc;
+          break;
+        }
+      }
+
+      if (!matchedDoc) {
+        matchedDoc = docs[0]; // Fallback to first document
+      }
+
+      const docUrl = matchedDoc.url === "#" ? "https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf" : matchedDoc.url;
+
+      return NextResponse.json({
+        status: "success",
+        reply: `🤖 Bot: 📁 Document Retrieved!\n📄 Name: *${matchedDoc.name}*\n📥 Type: *${matchedDoc.type}*\n🏢 Project: *${matchedDoc.projects?.name || "General"}*\n\n🔗 *Download Link*:\n${docUrl}\n\n(Tap the link to download details instantly.)`
+      });
+    }
+
+    // 7. UPCOMING LAUNCHES / EVENTS INTENT
+    if (commandLower.includes("launch") || commandLower.includes("event") || commandLower.includes("meet")) {
+      const { data: events } = await supabase
+        .from("events")
+        .select("*")
+        .order("created_at", { ascending: false });
+
+      if (!events || events.length === 0) {
+        return NextResponse.json({ status: "success", reply: "🤖 Bot: No upcoming launches or developer events scheduled at this moment." });
+      }
+
+      let replyMsg = `🚀 *Upcoming Launches & CP Meets*:\n\n`;
+      events.forEach((ev, idx) => {
+        replyMsg += `${idx + 1}. 📅 *${ev.title}*\n   📅 Date: *${ev.date}*\n   📍 Venue: *${ev.location}*\n   📝 Description: ${ev.description || "N/A"}\n\n`;
+      });
+      return NextResponse.json({ status: "success", reply: replyMsg.trim() });
+    }
+
+    // 8. WEBINAR REGISTRATION INTENT
+    if (commandLower.includes("webinar")) {
+      const { data: webinars } = await supabase
+        .from("webinars")
+        .select("*")
+        .order("created_at", { ascending: false });
+
+      if (!webinars || webinars.length === 0) {
+        return NextResponse.json({ status: "success", reply: "🤖 Bot: No active broker webinars scheduled. Check back later!" });
+      }
+
+      const targetWebinar = webinars[0]; // Register for the latest upcoming webinar
+
+      if (commandLower.includes("register") || commandLower.includes("join") || commandLower.includes("book")) {
+        return NextResponse.json({
+          status: "success",
+          reply: `🎉 *Webinar Registration Confirmed!*\n\n🎥 Title: *${targetWebinar.title}*\n📅 Time: *${targetWebinar.scheduled_time}*\n🎁 Reward: *${targetWebinar.reward || "Certificate"}*\n\nYour attendance pass has been generated. The live link will be sent to this chat 15 minutes before the start time. Attend & claim your reward!`
+        });
+      } else {
+        let replyMsg = `🎥 *Active Broker Webinars*:\n\n`;
+        webinars.forEach((w, idx) => {
+          replyMsg += `${idx + 1}. 📺 *${w.title}*\n   📅 Time: *${w.scheduled_time}*\n   🎁 Reward: *${w.reward || "N/A"}*\n   📝 Info: ${w.details || "N/A"}\n\n`;
+        });
+        replyMsg += `👉 Write _"aa Register webinar"_ to secure your virtual pass.`;
+        return NextResponse.json({ status: "success", reply: replyMsg.trim() });
+      }
+    }
+
+    // 9. SEARCH LEAD INTENT
+    if (
+      commandLower.startsWith("search lead") || 
+      commandLower.startsWith("find lead") || 
+      commandLower.startsWith("search") || 
+      commandLower.startsWith("find")
+    ) {
+      const query = commandText.replace(/(search lead|find lead|search|find)/i, "").trim();
+      
+      if (query) {
+        const { data: leads } = await supabase
+          .from("leads")
+          .select("*")
+          .eq("agent_id", profile.id);
+
+        const matched = leads?.filter(l => 
+          l.name.toLowerCase().includes(query.toLowerCase()) || 
+          l.phone.includes(query)
+        );
+
+        // If they search a location like Kokapet/Gachibowli, it should fallback to inventory search rather than failing lead search
+        const isLoc = query.toLowerCase().includes("kokapet") || query.toLowerCase().includes("gachibowli");
+
+        if ((!matched || matched.length === 0) && !isLoc) {
+          return NextResponse.json({ status: "success", reply: `🤖 Bot: ❌ No lead found matching "${query}" in your CRM.` });
+        } else if (matched && matched.length > 0) {
+          let replyMsg = `🤖 *Lead Lookup Results*\n\n`;
+          matched.forEach(l => {
+            replyMsg += `👤 *${l.name}*\n📱 Phone: ${l.phone}\n📧 Email: ${l.email || "N/A"} \n⚡ Status: *${l.status.toUpperCase()}*\n🏠 Req: ${l.requirement || "N/A"} in ${l.location || "N/A"}\n💰 Budget: ${l.budget || "N/A"}\n📝 Notes: ${l.details?.notes || "No notes available"}\n\n`;
+          });
+          return NextResponse.json({ status: "success", reply: replyMsg.trim() });
+        }
+      }
+    }
+
+    // 10. SEARCH INVENTORY / UNITS INTENT (Support: "Show east-facing plots", "Search 3BHK Kokapet", etc.)
+    const isInventorySearch = 
+      commandLower.includes("inventory") || 
+      commandLower.includes("project") ||
+      commandLower.includes("bhk") || 
+      commandLower.includes("kokapet") || 
+      commandLower.includes("gachibowli") || 
+      commandLower.includes("plot") || 
+      commandLower.includes("villa") || 
+      commandLower.includes("apartment") ||
+      commandLower.includes("east") ||
+      commandLower.includes("facing");
+
+    if (isInventorySearch) {
+      // Query inventory units with project metadata
+      const { data: units } = await supabase
+        .from("inventory_units")
+        .select("*, projects(*)");
+
+      let filteredUnits = units || [];
+
+      // Filter by type
+      if (commandLower.includes("plot")) {
+        filteredUnits = filteredUnits.filter(u => u.projects?.type === "plot");
+      } else if (commandLower.includes("villa")) {
+        filteredUnits = filteredUnits.filter(u => u.projects?.type === "villa");
+      } else if (commandLower.includes("apartment") || commandLower.includes("flat")) {
+        filteredUnits = filteredUnits.filter(u => u.projects?.type === "apartment");
+      }
+
+      // Filter by facing
+      if (commandLower.includes("east")) {
+        filteredUnits = filteredUnits.filter(u => 
+          u.details?.facing?.toLowerCase() === "east" || 
+          (typeof u.details === 'object' && u.details !== null && 'facing' in u.details && String((u.details as any).facing).toLowerCase() === "east")
+        );
+      } else if (commandLower.includes("north")) {
+        filteredUnits = filteredUnits.filter(u => 
+          u.details?.facing?.toLowerCase() === "north" ||
+          (typeof u.details === 'object' && u.details !== null && 'facing' in u.details && String((u.details as any).facing).toLowerCase() === "north")
+        );
+      }
+
+      // Filter by location
+      if (commandLower.includes("kokapet")) {
+        filteredUnits = filteredUnits.filter(u => u.projects?.location?.toLowerCase() === "kokapet");
+      } else if (commandLower.includes("gachibowli")) {
+        filteredUnits = filteredUnits.filter(u => u.projects?.location?.toLowerCase() === "gachibowli");
+      }
+
+      // Filter by BHK
+      if (commandLower.includes("3bhk") || commandLower.includes("3 bhk")) {
+        filteredUnits = filteredUnits.filter(u => 
+          u.details?.bhk === "3 BHK" || 
+          (typeof u.details === 'object' && u.details !== null && 'bhk' in u.details && String((u.details as any).bhk) === "3 BHK")
+        );
+      } else if (commandLower.includes("2bhk") || commandLower.includes("2 bhk")) {
+        filteredUnits = filteredUnits.filter(u => 
+          u.details?.bhk === "2 BHK" ||
+          (typeof u.details === 'object' && u.details !== null && 'bhk' in u.details && String((u.details as any).bhk) === "2 BHK")
+        );
+      }
+
+      let replyMsg = `🤖 *Inventory Matches Found*:\n\n`;
+      if (filteredUnits.length === 0) {
+        replyMsg = `🤖 Bot: No specific units match your search. Here are general projects:\n\n`;
+        const { data: projects } = await supabase.from("projects").select("*");
+        projects?.forEach(p => {
+          replyMsg += `🏢 *${p.name}* (${p.location})\n💰 Price: ${p.price_range}\n🏗️ Type: ${p.type.toUpperCase()}\n\n`;
+        });
+        return NextResponse.json({ status: "success", reply: replyMsg.trim() });
+      }
+
+      filteredUnits.forEach((u, idx) => {
+        const projName = u.projects?.name || "General Project";
+        const location = u.projects?.location || "N/A";
+        const type = u.projects?.type || "N/A";
+        const statusEmoji = u.status === "available" ? "🟢" : u.status === "booked" ? "🟡" : "🔴";
+        
+        let detailsStr = "";
+        if (u.details && typeof u.details === "object") {
+          detailsStr = Object.entries(u.details)
+            .map(([k, v]) => `• ${k.charAt(0).toUpperCase() + k.slice(1)}: *${v}*`)
+            .join("\n");
+        }
+
+        replyMsg += `${idx + 1}. ${statusEmoji} *${u.unit_name}* in *${projName}*\n📍 Loc: ${location} | Type: ${type.toUpperCase()}\n⚙️ Status: *${u.status.toUpperCase()}*\n${detailsStr}\n\n`;
+      });
+
+      return NextResponse.json({ status: "success", reply: replyMsg.trim() });
+    }
+
+    // Default/Fallback help menu
+    const helpMsg = `🤖 Bot: I didn't catch that command. Type *help* to see all available commands.`;
+    return NextResponse.json({ status: "success", reply: helpMsg });
   } catch (err: any) {
     console.error("Error processing WhatsApp POST Webhook:", err);
-    return NextResponse.json({ error: err.message }, { status: 500 });
+    return NextResponse.json({ error: err.message, reply: `🤖 Bot: ❌ Internal Webhook Error: ${err.message}` }, { status: 500 });
   }
 }

@@ -25,26 +25,75 @@ export default function AgentBottomNav() {
     { name: "Profile", href: "/agent/profile", icon: User },
   ];
 
-  const handleSendChat = (e: React.FormEvent) => {
+  const handleSendChat = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!chatInput) return;
 
     const userMsg = `👤 You: ${chatInput}`;
-    let botReply = "🤖 Bot: I didn't catch that command. Type 'help' to see what I can do.";
-
-    const inputLower = chatInput.toLowerCase();
-    if (inputLower.includes("add lead") || inputLower.includes("add ramesh")) {
-      botReply = "🤖 Bot: ✅ Lead Ravi created! I parsed: Name = Ravi, requirement = 3 BHK. Scheduled follow-up nudge.";
-    } else if (inputLower.includes("show plots") || inputLower.includes("inventory")) {
-      botReply = "🤖 Bot: 🔍 Match found: Skyline Heights, Kokapet (12 units available starting at ₹1.82 Cr).";
-    } else if (inputLower.includes("remind") || inputLower.includes("tomorrow")) {
-      botReply = "🤖 Bot: ⏰ Reminder set! Scheduled Celery task on Monday 5:00 PM.";
-    } else if (inputLower.includes("help") || inputLower.includes("command")) {
-      botReply = "🤖 Bot: Try writing:\n- Add lead Ravi looking for 3BHK\n- Show plots in Gachibowli\n- Remind me tomorrow 5pm about Ravi";
-    }
-
-    setChatHistory([...chatHistory, userMsg, botReply]);
+    const promptToSend = chatInput;
+    
+    // Render user message optimistically
+    setChatHistory(prev => [...prev, userMsg]);
     setChatInput("");
+
+    try {
+      const rawPhone = localStorage.getItem("agentsapp_logged_in_phone") || "+91 98765 43210";
+      const cleanPhone = rawPhone.replace(/\D/g, ""); // "919876543210"
+      const userName = localStorage.getItem("agentsapp_logged_in_user") || "Sreenivas Rao";
+
+      // POST to the live local whatsapp webhook API
+      const response = await fetch("/api/whatsapp/webhook", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          object: "whatsapp_business_account",
+          entry: [
+            {
+              id: "sandbox-entry",
+              changes: [
+                {
+                  field: "messages",
+                  value: {
+                    messaging_product: "whatsapp",
+                    metadata: {
+                      display_phone_number: "919999999999",
+                      phone_number_id: "bot-phone-id"
+                    },
+                    contacts: [
+                      {
+                        profile: {
+                          name: userName
+                        },
+                        wa_id: cleanPhone
+                      }
+                    ],
+                    messages: [
+                      {
+                        from: cleanPhone,
+                        id: `wamid.sandbox_${Date.now()}`,
+                        timestamp: Math.floor(Date.now() / 1000).toString(),
+                        text: {
+                          body: promptToSend
+                        },
+                        type: "text"
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          ]
+        })
+      });
+
+      const data = await response.json();
+      const botReply = data.reply || "🤖 Bot: Processed webhook action successfully.";
+      setChatHistory(prev => [...prev, botReply]);
+    } catch (err: any) {
+      setChatHistory(prev => [...prev, `🤖 Bot: ❌ Failed to dispatch webhook: ${err.message}`]);
+    }
   };
 
   return (
@@ -117,6 +166,30 @@ export default function AgentBottomNav() {
                   </div>
                 );
               })}
+            </div>
+
+            {/* Quick Suggestion Chips */}
+            <div className="bg-[#efeae2] px-3 pb-2.5 flex space-x-1.5 overflow-x-auto shrink-0 scrollbar-thin select-none">
+              {[
+                { label: "ℹ️ Help", cmd: "help" },
+                { label: "🆕 Add Ravi (3BHK)", cmd: "Add Ravi looking for 3BHK" },
+                { label: "🏢 East-facing Plots", cmd: "Show east-facing plots" },
+                { label: "⏰ Remind Tomorrow", cmd: "Remind me tomorrow to call Ramesh" },
+                { label: "📁 Skyline Brochure", cmd: "Send Skyline brochure" },
+                { label: "🚀 Upcoming Launches", cmd: "Upcoming launches" },
+                { label: "🎥 Register Webinar", cmd: "Register webinar" },
+                { label: "📋 My Leads", cmd: "my leads" },
+                { label: "⚡ Status Site Visit", cmd: "Amit site visit" }
+              ].map((item, idx) => (
+                <button
+                  key={idx}
+                  type="button"
+                  onClick={() => setChatInput(item.cmd)}
+                  className="bg-white/95 active:bg-slate-200 border border-slate-200/60 text-slate-700 text-[8px] font-bold py-1 px-2.5 rounded-full whitespace-nowrap shadow-sm transition hover:scale-105 shrink-0"
+                >
+                  {item.label}
+                </button>
+              ))}
             </div>
 
             {/* Chat Footer Input */}

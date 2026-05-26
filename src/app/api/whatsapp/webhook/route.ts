@@ -27,14 +27,20 @@ export async function POST(req: NextRequest) {
     const payload = await req.json();
     console.log("WhatsApp Webhook Payload Received:", JSON.stringify(payload));
 
-    // DIAGNOSTICS: Log raw payload to Supabase
+    // DIAGNOSTICS: Log raw payload to Supabase (upsert ensures row is created if missing)
     try {
+      const nowIST = new Date().toLocaleString("en-IN", { timeZone: "Asia/Kolkata" });
       await supabase
         .from("profiles")
-        .update({
-          rejection_reason: `Raw: ${JSON.stringify(payload).slice(0, 1000)}`
-        })
-        .eq("phone", "+91 99999 99999");
+        .upsert({
+          phone: "+91 99999 99999",
+          name: "Webhook Debug Log",
+          role: "admin",
+          status: "approved",
+          points: 0,
+          referrals_count: 0,
+          rejection_reason: `[${nowIST} IST] Received from: ${payload.data?.contact?.phoneNumber || payload.from || "unknown"} | Msg: ${JSON.stringify(payload).slice(0, 800)}`
+        }, { onConflict: "phone" });
     } catch (dbErr) {
       console.error("Diagnostics save failed:", dbErr);
     }

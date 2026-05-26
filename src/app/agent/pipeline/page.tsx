@@ -1,12 +1,13 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { 
   Plus, Search, Filter, Kanban as KanbanIcon, 
   List as ListIcon, X, MapPin, Phone, 
   Trash2, ArrowRightLeft, Sparkles, MessageSquare, 
-  PhoneCall, Calendar, Share2 
+  PhoneCall, Calendar, Share2, Loader2 
 } from "lucide-react";
+import { supabase } from "@/lib/supabase";
 
 interface Client {
   id: string;
@@ -22,10 +23,30 @@ interface Client {
   stage: "New" | "Interested" | "Site Visit" | "Negotiation" | "Closed" | "Lost";
 }
 
+const STAGE_MAP_DB_TO_UI: Record<string, Client["stage"]> = {
+  "new": "New",
+  "interested": "Interested",
+  "site_visit": "Site Visit",
+  "negotiation": "Negotiation",
+  "closed": "Closed",
+  "lost": "Lost"
+};
+
+const STAGE_MAP_UI_TO_DB: Record<Client["stage"], string> = {
+  "New": "new",
+  "Interested": "interested",
+  "Site Visit": "site_visit",
+  "Negotiation": "negotiation",
+  "Closed": "closed",
+  "Lost": "lost"
+};
+
 export default function ClientPipeline() {
   const [view, setView] = useState<"kanban" | "list">("kanban");
   const [searchQuery, setSearchQuery] = useState("");
   const [showAddModal, setShowAddModal] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [agentId, setAgentId] = useState<string | null>(null);
 
   // Form states
   const [newClientName, setNewClientName] = useState("");
@@ -35,17 +56,66 @@ export default function ClientPipeline() {
   const [newClientBudget, setNewClientBudget] = useState("");
   const [newClientProp, setNewClientProp] = useState<Client["propertyType"]>("Apartment");
 
-  const [clients, setClients] = useState<Client[]>([
-    { id: "1", name: "Ramesh Kumar", phone: "98765 43210", bhk: "3 BHK", location: "Kokapet", budget: "₹1.80 Cr", date: "25 May", propertyType: "Apartment", aiScore: 92, lastInteraction: "Call yesterday", stage: "New" },
-    { id: "2", name: "Vikas Sharma", phone: "98765 55210", bhk: "2400 sqft", location: "Gachibowli", budget: "₹1.40 Cr", date: "24 May", propertyType: "Plot", aiScore: 78, lastInteraction: "WA today", stage: "New" },
-    { id: "3", name: "Pooja Madhu", phone: "98765 44210", bhk: "3 BHK", location: "Gachibowli", budget: "₹1.50 Cr", date: "24 May", propertyType: "Apartment", aiScore: 84, lastInteraction: "No contact", stage: "New" },
-    { id: "4", name: "Neha Singh", phone: "98765 33210", bhk: "2 BHK", location: "Financial Dist", budget: "₹85 Lakhs", date: "Today", propertyType: "Apartment", aiScore: 95, lastInteraction: "Brochure shared", stage: "Interested" },
-    { id: "5", name: "Arun Reddy", phone: "98765 22210", bhk: "4 BHK", location: "Kokapet", budget: "₹3.50 Cr", date: "Tomorrow", propertyType: "Villa", aiScore: 81, lastInteraction: "Call last week", stage: "Site Visit" },
-    { id: "6", name: "Mansi Gupta", phone: "98765 66210", bhk: "4 BHK", location: "Kokapet", budget: "₹3.20 Cr", date: "23 May", propertyType: "Villa", aiScore: 88, lastInteraction: "Negotiating", stage: "Negotiation" },
-    { id: "7", name: "Karthik Iyer", phone: "98765 11210", bhk: "Office Space", location: "Hitech City", budget: "₹5.50 Cr", date: "22 May", propertyType: "Commercial", aiScore: 90, lastInteraction: "Closed proposal", stage: "Closed" },
-  ]);
+  const [clients, setClients] = useState<Client[]>([]);
 
   const stages: Client["stage"][] = ["New", "Interested", "Site Visit", "Negotiation", "Closed", "Lost"];
+
+  // Fetch client leads from Supabase
+  async function loadLeads() {
+    setLoading(true);
+    try {
+      const phone = localStorage.getItem("agentsapp_logged_in_phone") || "+91 98765 43210";
+      
+      // 1. Fetch current agent ID
+      const { data: profile } = await supabase
+        .from("profiles")
+        .select("id")
+        .eq("phone", phone)
+        .single();
+
+      if (profile) {
+        setAgentId(profile.id);
+
+        // 2. Fetch leads for this agent
+        const { data: leads, error } = await supabase
+          .from("leads")
+          .select("*")
+          .eq("agent_id", profile.id)
+          .order("created_at", { ascending: false });
+
+        if (leads) {
+          const mappedClients: Client[] = leads.map((l: any) => {
+            const displayProp = l.details?.propertyType || "Apartment";
+            const interaction = l.details?.lastInteraction || "Lead created";
+            const score = l.details?.aiScore || Math.floor(65 + Math.random() * 30);
+
+            return {
+              id: l.id,
+              name: l.name,
+              phone: l.phone,
+              bhk: l.requirement || "3 BHK",
+              location: l.location || "Kokapet",
+              budget: l.budget || "₹1.50 Cr",
+              date: new Date(l.created_at).toLocaleDateString('en-US', { day: 'numeric', month: 'short' }),
+              propertyType: displayProp,
+              aiScore: score,
+              lastInteraction: interaction,
+              stage: STAGE_MAP_DB_TO_UI[l.status] || "New"
+            };
+          });
+          setClients(mappedClients);
+        }
+      }
+    } catch (err) {
+      console.error("Error loading leads:", err);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    loadLeads();
+  }, []);
 
   // Filter clients based on search query
   const filteredClients = clients.filter(client => 
@@ -54,40 +124,89 @@ export default function ClientPipeline() {
     client.bhk.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
-  const handleAddClient = (e: React.FormEvent) => {
+  const handleAddClient = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newClientName || !newClientLoc || !newClientBudget) return;
+    if (!newClientName || !newClientLoc || !newClientBudget || !agentId) return;
+    setLoading(true);
 
-    const newClient: Client = {
-      id: Date.now().toString(),
-      name: newClientName,
-      phone: newClientPhone || "98765 00000",
-      bhk: newClientBhk,
-      location: newClientLoc,
-      budget: newClientBudget,
-      date: "Just now",
-      propertyType: newClientProp,
-      aiScore: Math.floor(65 + Math.random() * 30),
-      lastInteraction: "Lead logged",
-      stage: "New",
-    };
+    try {
+      const generatedScore = Math.floor(65 + Math.random() * 30);
+      
+      const { data, error } = await supabase
+        .from("leads")
+        .insert([{
+          agent_id: agentId,
+          name: newClientName,
+          phone: newClientPhone || "98765 00000",
+          requirement: newClientBhk,
+          location: newClientLoc,
+          budget: newClientBudget,
+          status: "new",
+          details: {
+            propertyType: newClientProp,
+            aiScore: generatedScore,
+            lastInteraction: "Lead logged"
+          }
+        }])
+        .select()
+        .single();
 
-    setClients([newClient, ...clients]);
-    setNewClientName("");
-    setNewClientPhone("");
-    setNewClientLoc("");
-    setNewClientBudget("");
-    setShowAddModal(false);
+      if (error) throw error;
+
+      setNewClientName("");
+      setNewClientPhone("");
+      setNewClientLoc("");
+      setNewClientBudget("");
+      setShowAddModal(false);
+      
+      await loadLeads();
+    } catch (err: any) {
+      alert("Error adding lead: " + err.message);
+    } finally {
+      setLoading(false);
+    }
   };
 
-  const handleMoveStage = (id: string, currentStage: Client["stage"]) => {
+  const handleMoveStage = async (id: string, currentStage: Client["stage"]) => {
     const nextStageIndex = (stages.indexOf(currentStage) + 1) % stages.length;
     const nextStage = stages[nextStageIndex];
-    setClients(clients.map(c => c.id === id ? { ...c, stage: nextStage } : c));
+    const dbStatus = STAGE_MAP_UI_TO_DB[nextStage];
+    setLoading(true);
+
+    try {
+      const { error } = await supabase
+        .from("leads")
+        .update({ status: dbStatus })
+        .eq("id", id);
+
+      if (error) throw error;
+      
+      await loadLeads();
+    } catch (err: any) {
+      alert("Error progression stage: " + err.message);
+    } finally {
+      setLoading(false);
+    }
   };
 
-  const handleDeleteClient = (id: string) => {
-    setClients(clients.filter(c => c.id !== id));
+  const handleDeleteClient = async (id: string) => {
+    if (!confirm("Are you sure you want to delete this lead?")) return;
+    setLoading(true);
+
+    try {
+      const { error } = await supabase
+        .from("leads")
+        .delete()
+        .eq("id", id);
+
+      if (error) throw error;
+
+      await loadLeads();
+    } catch (err: any) {
+      alert("Error deleting lead: " + err.message);
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
@@ -128,6 +247,14 @@ export default function ClientPipeline() {
         </div>
       </div>
 
+      {/* Loader indicator */}
+      {loading && (
+        <div className="flex items-center space-x-2 text-xs font-bold text-slate-405 text-slate-400 uppercase tracking-wider">
+          <Loader2 className="w-4 h-4 animate-spin text-[#25d366]" />
+          <span>Syncing pipeline...</span>
+        </div>
+      )}
+
       {/* Search Filter Controls */}
       <div className="flex flex-col md:flex-row gap-3">
         <div className="relative flex-1">
@@ -140,7 +267,7 @@ export default function ClientPipeline() {
             className="w-full bg-white border border-slate-250 focus:border-[#25d366] rounded-xl py-2 pl-10 pr-4 text-xs text-slate-800 outline-none transition"
           />
         </div>
-        <button className="px-4 py-2 bg-white border border-slate-200 hover:bg-slate-50 rounded-xl text-slate-600 flex items-center space-x-1.5 text-xs font-bold transition">
+        <button className="px-4 py-2 bg-white border border-slate-200 hover:bg-slate-550 rounded-xl text-slate-600 flex items-center space-x-1.5 text-xs font-bold transition">
           <Filter className="w-4 h-4" />
           <span>Filters</span>
         </button>
@@ -170,7 +297,7 @@ export default function ClientPipeline() {
                   {stageClients.map((client) => (
                     <div 
                       key={client.id}
-                      className="p-3.5 bg-slate-50 border border-slate-200 rounded-xl hover:border-[#25d366]/40 hover:bg-white transition flex flex-col justify-between group shadow-sm"
+                      className="p-3.5 bg-slate-50 border border-slate-200 rounded-xl hover:border-[#25d366]/40 hover:bg-white transition flex flex-col justify-between group shadow-sm animate-in fade-in duration-200"
                     >
                       <div>
                         <div className="flex justify-between items-start">
@@ -187,7 +314,7 @@ export default function ClientPipeline() {
                         <div className="text-[10px] text-slate-500 flex items-center space-x-1.5 mt-1 font-semibold">
                           <span>{client.propertyType}</span>
                           <span>·</span>
-                          <span className="flex items-center text-slate-400">
+                          <span className="flex items-center text-slate-450">
                             <MapPin className="w-2.5 h-2.5 mr-0.5" />
                             {client.location}
                           </span>
@@ -276,15 +403,15 @@ export default function ClientPipeline() {
                   </td>
                   <td className="px-5 py-3">{client.propertyType}</td>
                   <td className="px-5 py-3">
-                    <span className="px-2 py-0.5 rounded bg-slate-100 text-slate-600 text-[10px] mr-1.5">{client.bhk}</span>
+                    <span className="span-bhk px-2 py-0.5 rounded bg-slate-100 text-slate-600 text-[10px] mr-1.5">{client.bhk}</span>
                     <span className="text-slate-500">{client.location}</span>
                   </td>
                   <td className="px-5 py-3 font-bold text-slate-950">{client.budget}</td>
                   <td className="px-5 py-3">
                     <span className={`px-2.5 py-1 rounded-full text-[10px] font-bold ${
-                      client.stage === "New" ? "bg-slate-100 text-slate-600" :
+                      client.stage === "New" ? "bg-slate-100 text-slate-655" :
                       client.stage === "Interested" ? "bg-indigo-50 text-indigo-600" :
-                      client.stage === "Site Visit" ? "bg-purple-50 text-purple-600" :
+                      client.stage === "Site Visit" ? "bg-purple-50 text-purple-650" :
                       "bg-emerald-50 text-emerald-600"
                     }`}>
                       {client.stage}

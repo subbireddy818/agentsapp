@@ -8,6 +8,7 @@ import {
   CheckCircle2, Loader2, KeyRound, Sparkles,
   MessageSquare, FileText, Upload, Clock, UserCheck
 } from "lucide-react";
+import { supabase } from "@/lib/supabase";
 
 function LoginContent() {
   const router = useRouter();
@@ -61,7 +62,7 @@ function LoginContent() {
       setLoading(false);
       setStep(2);
       setMessage("OTP sent successfully to " + phone + ". (Use code: 123456)");
-    }, 1200);
+    }, 1000);
   };
 
   const handleOtpChange = (index: number, value: string) => {
@@ -77,7 +78,7 @@ function LoginContent() {
     }
   };
 
-  const handleVerifyOtp = (e: React.FormEvent) => {
+  const handleVerifyOtp = async (e: React.FormEvent) => {
     e.preventDefault();
     const enteredCode = otp.join("");
     if (enteredCode.length < 6) {
@@ -88,34 +89,84 @@ function LoginContent() {
     setLoading(true);
     setMessage("");
 
-    // Simulate OTP verification
-    setTimeout(() => {
+    if (enteredCode !== "123456") {
       setLoading(false);
-      if (enteredCode === "123456") {
-        setMessage("");
+      setMessage("Invalid OTP. Please enter the correct code (123456).");
+      return;
+    }
+
+    try {
+      // Format phone number
+      const cleanPhone = phone.replace(/\s+/g, "");
+      const formattedPhone = `+91 ${cleanPhone.slice(-10)}`;
+      
+      // Query profiles table in Supabase
+      const { data: profile, error } = await supabase
+        .from("profiles")
+        .select("*")
+        .eq("phone", formattedPhone)
+        .single();
+
+      if (error && error.code !== "PGRST116") {
+        console.error("Supabase query error:", error);
+      }
+
+      setLoading(false);
+
+      if (profile) {
+        // User exists -> Log them in and store their session profile in localStorage
+        localStorage.setItem("agentsapp_logged_in_user", profile.name);
+        localStorage.setItem("agentsapp_logged_in_phone", profile.phone);
+        localStorage.setItem("agentsapp_logged_in_role", profile.role);
         
-        // Check if role is broker
-        if (role === "agent") {
-          // Default broker login bypasses onboarding wizard
-          if (phone === "9876543210" || phone.replace(/\s+/g, "") === "9876543210") {
-            // Seed profile and login directly
-            localStorage.setItem("agentsapp_logged_in_user", "Sreenivas Rao");
-            router.push("/agent/dashboard");
-          } else {
-            // New broker registration: advance to WhatsApp verification step
-            setStep(3);
-          }
-        } else if (role === "builder") {
-          localStorage.setItem("agentsapp_logged_in_user", "Builder Partner");
+        // Route based on role
+        if (profile.role === "builder") {
           router.push("/builder/dashboard");
-        } else if (role === "admin") {
-          localStorage.setItem("agentsapp_logged_in_user", "Admin Ops");
+        } else if (profile.role === "admin") {
           router.push("/admin/dashboard");
+        } else {
+          router.push("/agent/dashboard");
         }
       } else {
-        setMessage("Invalid OTP. Please enter the correct code (123456).");
+        // User does not exist
+        if (role === "agent") {
+          // Start broker onboarding wizard
+          setStep(3);
+        } else {
+          // For builders or admins, create a default profile on the fly so the demo is smooth
+          setLoading(true);
+          const name = role === "builder" ? "Prestige Group" : "Ops Admin";
+          
+          const { data: newProfile, error: insertError } = await supabase
+            .from("profiles")
+            .insert([{
+              phone: formattedPhone,
+              role: role,
+              name: name,
+              status: "approved",
+              points: 0,
+              referrals_count: 0
+            }])
+            .select()
+            .single();
+
+          setLoading(false);
+
+          if (insertError) {
+            setMessage("Failed to create profile in database. " + insertError.message);
+          } else if (newProfile) {
+            localStorage.setItem("agentsapp_logged_in_user", newProfile.name);
+            localStorage.setItem("agentsapp_logged_in_phone", newProfile.phone);
+            localStorage.setItem("agentsapp_logged_in_role", newProfile.role);
+            router.push(role === "builder" ? "/builder/dashboard" : "/admin/dashboard");
+          }
+        }
       }
-    }, 1200);
+    } catch (err: any) {
+      setLoading(false);
+      setMessage("Connection error. Please try again.");
+      console.error(err);
+    }
   };
 
   const handleVerifyWhatsApp = () => {
@@ -123,10 +174,10 @@ function LoginContent() {
     setTimeout(() => {
       setWaVerifying(false);
       setWaVerified(true);
-    }, 1800);
+    }, 1500);
   };
 
-  const handleKycSubmit = (e: React.FormEvent) => {
+  const handleKycSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!fullName || !agencyName || !email || !reraNumber || !reraUploaded || !idUploaded) {
       setMessage("Please fill in all details and upload files.");
@@ -136,66 +187,77 @@ function LoginContent() {
     setLoading(true);
     setMessage("");
 
-    setTimeout(() => {
-      setLoading(false);
+    try {
+      const cleanPhone = phone.replace(/\s+/g, "");
+      const formattedPhone = `+91 ${cleanPhone.slice(-10)}`;
 
-      if (typeof window !== "undefined") {
-        const newRequest = {
-          id: `req-${Math.floor(1000 + Math.random() * 9000)}`,
+      // 1. Insert new pending Broker profile in Supabase
+      const { data: newProfile, error: profileError } = await supabase
+        .from("profiles")
+        .insert([{
+          phone: formattedPhone,
+          role: "agent",
           name: fullName,
-          agency: agencyName,
-          phone: `+91 ${phone}`,
+          agency_name: agencyName,
           email: email,
-          rera: reraNumber,
-          docs: [
-            { name: "RERA Certificate.pdf", type: "RERA Copy", url: "#" },
-            { name: "Aadhaar Card.pdf", type: "Identity Proof", url: "#" }
-          ],
-          status: "Pending",
-          referredBy: refCode || null,
-          date: new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
-        };
+          rera_number: reraNumber,
+          status: "pending",
+          points: 0,
+          referrals_count: 0,
+          location: "Hyderabad"
+        }])
+        .select()
+        .single();
 
-        // Save to Admin KYC requests queue
-        const currentRequests = JSON.parse(localStorage.getItem("agentsapp_verification_requests") || "[]");
-        currentRequests.push(newRequest);
-        localStorage.setItem("agentsapp_verification_requests", JSON.stringify(currentRequests));
+      if (profileError) {
+        setLoading(false);
+        setMessage("Database error: " + profileError.message);
+        return;
+      }
 
-        // If referred, register pending referral under referrer's rewards tracking
-        if (refCode) {
-          const currentReferrals = JSON.parse(localStorage.getItem("agentsapp_referral_list") || "[]");
-          // Check if this number already referred to avoid duplicate entry
-          if (!currentReferrals.some((r: any) => r.phone.includes(phone))) {
-            currentReferrals.push({
-              id: newRequest.id,
-              name: fullName,
-              phone: `+91 ${phone}`,
-              status: "Pending Approval",
-              pointsAwarded: 0,
-              date: newRequest.date
-            });
-            localStorage.setItem("agentsapp_referral_list", JSON.stringify(currentReferrals));
+      // 2. If referred, attribute registration to the referrer
+      if (refCode && newProfile) {
+        // Query referrer profile
+        const { data: referrer, error: refError } = await supabase
+          .from("profiles")
+          .select("*")
+          .eq("cp_id", refCode)
+          .single();
 
-            // Also increment the referrer's referralsCount in their stored profile
-            const referrerProfile = localStorage.getItem("agentsapp_agent_profile");
-            if (referrerProfile) {
-              const parsed = JSON.parse(referrerProfile);
-              if (parsed.cpId === refCode) {
-                parsed.referralsCount = (parsed.referralsCount || 0) + 1;
-                localStorage.setItem("agentsapp_agent_profile", JSON.stringify(parsed));
-              }
-            }
-          }
+        if (referrer) {
+          // Insert row in referrals table
+          await supabase
+            .from("referrals")
+            .insert([{
+              referrer_id: referrer.id,
+              referred_name: fullName,
+              referred_phone: formattedPhone,
+              status: "pending",
+              points_awarded: 0,
+              date: new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+            }]);
+
+          // Increment referrer's count
+          await supabase
+            .from("profiles")
+            .update({ referrals_count: (referrer.referrals_count || 0) + 1 })
+            .eq("id", referrer.id);
         }
       }
 
-      setStep(5); // Show pending ops screen
-    }, 1500);
+      setLoading(false);
+      setStep(5); // Show pending review page
+    } catch (err: any) {
+      setLoading(false);
+      setMessage("Failed to register. Please check database connection.");
+      console.error(err);
+    }
   };
 
   const handleEnterDemo = () => {
-    // Setup a temp mock profile for the dashboard view
     localStorage.setItem("agentsapp_logged_in_user", fullName || "New Partner");
+    localStorage.setItem("agentsapp_logged_in_phone", `+91 ${phone}`);
+    localStorage.setItem("agentsapp_logged_in_role", "agent");
     router.push("/agent/dashboard");
   };
 
@@ -292,13 +354,13 @@ function LoginContent() {
               </div>
               {role === "agent" && (
                 <div className="mt-2 text-[10px] text-slate-400 font-semibold italic text-center">
-                  💡 Sandbox: Use number <span className="font-extrabold text-slate-600">9876543210</span> to bypass KYC wizard. Enter any other number to test the referral/KYC flow.
+                  💡 Sandbox: Use number <span className="font-extrabold text-slate-600">98765 43210</span> to bypass KYC wizard. Enter any other number to test the referral/KYC flow.
                 </div>
               )}
             </div>
 
             {message && (
-              <div className="p-3 bg-red-50 border border-red-200 rounded-xl text-xs text-red-655 flex items-center space-x-2 font-bold text-red-600">
+              <div className="p-3 bg-red-50 border border-red-200 rounded-xl text-xs text-red-600 flex items-center space-x-2 font-bold">
                 <ShieldAlert className="w-4 h-4 shrink-0" />
                 <span>{message}</span>
               </div>
@@ -521,7 +583,7 @@ function LoginContent() {
                 <div 
                   onClick={() => setReraUploaded(true)}
                   className={`border border-dashed rounded-xl p-3 text-center cursor-pointer hover:bg-slate-50/50 flex flex-col items-center justify-center h-20 transition ${
-                    reraUploaded ? "border-[#25d366]/40 bg-emerald-50/20 text-[#16c47f]" : "border-slate-200 text-slate-450"
+                    reraUploaded ? "border-[#25d366]/40 bg-emerald-50/20 text-[#16c47f]" : "border-slate-200 text-slate-400"
                   }`}
                 >
                   {reraUploaded ? (
@@ -543,7 +605,7 @@ function LoginContent() {
                 <div 
                   onClick={() => setIdUploaded(true)}
                   className={`border border-dashed rounded-xl p-3 text-center cursor-pointer hover:bg-slate-50/50 flex flex-col items-center justify-center h-20 transition ${
-                    idUploaded ? "border-[#25d366]/40 bg-emerald-50/20 text-[#16c47f]" : "border-slate-200 text-slate-455"
+                    idUploaded ? "border-[#25d366]/40 bg-emerald-50/20 text-[#16c47f]" : "border-slate-200 text-slate-400"
                   }`}
                 >
                   {idUploaded ? (
@@ -601,7 +663,7 @@ function LoginContent() {
             </p>
           </div>
 
-          <div className="p-4 bg-slate-50 border border-slate-200 rounded-2xl text-left space-y-3 text-[11px] font-semibold text-slate-655 leading-relaxed">
+          <div className="p-4 bg-slate-50 border border-slate-200 rounded-2xl text-left space-y-3 text-[11px] font-semibold leading-relaxed">
             <div className="font-extrabold text-slate-800 text-xs border-b border-slate-100 pb-1.5 flex items-center justify-between">
               <span>Onboarding Summary</span>
               <span className="text-[9px] bg-amber-50 text-amber-600 px-2 py-0.5 rounded border border-amber-200">Pending Review</span>
@@ -615,7 +677,7 @@ function LoginContent() {
             <div>
               <span className="text-slate-400 font-medium">Assigned Referrer:</span> {refCode || "None (Direct Sign Up)"}
             </div>
-            <div className="pt-2 border-t border-slate-100 text-[10px] text-slate-450 italic">
+            <div className="pt-2 border-t border-slate-100 text-[10px] text-slate-400 italic">
               📢 <span className="font-bold text-slate-600">Demo Simulation Alert:</span> To complete the funnel, switch to the <span className="font-bold text-slate-600">Verification / Admin</span> portal at the bottom of the sidebar, select this application, and click Approve!
             </div>
           </div>

@@ -5,6 +5,7 @@ import {
   Check, X, FileText, ShieldAlert, 
   ArrowRight, ShieldCheck, Eye, Loader2, Award 
 } from "lucide-react";
+import { supabase } from "@/lib/supabase";
 
 interface BrokerRequest {
   id: string;
@@ -22,157 +23,146 @@ interface BrokerRequest {
 
 export default function VerificationQueue() {
   const [requests, setRequests] = useState<BrokerRequest[]>([]);
+  const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<"Pending" | "Approved" | "Rejected">("Pending");
   const [selectedRequest, setSelectedRequest] = useState<BrokerRequest | null>(null);
   const [showRejectModal, setShowRejectModal] = useState(false);
   const [rejectReason, setRejectReason] = useState("");
   const [approveSuccessId, setApproveSuccessId] = useState<string | null>(null);
 
-  // Load from localStorage on mount
-  useEffect(() => {
-    if (typeof window !== "undefined") {
-      const defaultRequests: BrokerRequest[] = [
-        {
-          id: "req-1",
-          name: "Rajesh Sekhar",
-          agency: "Rajesh Estates & Realty",
-          phone: "+91 99122 33445",
-          email: "rajesh@rajeshestates.com",
-          rera: "RERA-HYD-882103",
-          docs: [
-            { name: "RERA Certificate.pdf", type: "RERA Copy", url: "rera_cert.pdf" },
-            { name: "PAN Card Copy.jpg", type: "PAN Card", url: "pan_card.jpg" },
-            { name: "Aadhaar Card Copy.pdf", type: "Aadhaar", url: "aadhaar.pdf" }
-          ],
-          status: "Pending"
-        },
-        {
-          id: "req-2",
-          name: "Kiran Goud",
-          agency: "Kiran Realty Services",
-          phone: "+91 98450 12345",
-          email: "kiran@kiranrealty.in",
-          rera: "RERA-HYD-551029",
-          docs: [
-            { name: "RERA Certificate.pdf", type: "RERA Copy", url: "rera_cert.pdf" },
-            { name: "GST registration.pdf", type: "GST copy", url: "gst.pdf" },
-            { name: "Aadhaar Card.jpg", type: "Aadhaar", url: "aadhaar.jpg" }
-          ],
-          status: "Pending"
-        },
-        {
-          id: "req-3",
-          name: "Sreenivas Rao",
-          agency: "Rao Real Estate Services",
-          phone: "+91 98765 43210",
-          email: "sreenivas@raorealty.in",
-          rera: "RERA-HYD-551029",
-          docs: [
-            { name: "RERA_Cert.pdf", type: "RERA Copy", url: "rera.pdf" },
-            { name: "GST_Doc.pdf", type: "GST copy", url: "gst.pdf" }
-          ],
-          status: "Approved",
-          assignedCpId: "CP-8402"
-        }
-      ];
+  // Load requests dynamically from Supabase
+  async function loadRequests() {
+    setLoading(true);
+    try {
+      // Fetch all agent profiles
+      const { data: profiles, error } = await supabase
+        .from("profiles")
+        .select("*")
+        .eq("role", "agent")
+        .order("created_at", { ascending: false });
 
-      const stored = localStorage.getItem("agentsapp_verification_requests");
-      if (stored) {
-        const parsed = JSON.parse(stored);
-        const merged = [...defaultRequests];
-        
-        parsed.forEach((req: BrokerRequest) => {
-          const index = merged.findIndex(r => r.id === req.id || r.phone === req.phone);
-          if (index !== -1) {
-            merged[index] = req;
-          } else {
-            merged.push(req);
-          }
+      if (profiles) {
+        // Fetch referrals to match referredBy
+        const { data: referrals } = await supabase
+          .from("referrals")
+          .select("referred_phone, referrer_id, profiles(cp_id)");
+
+        const mapped: BrokerRequest[] = profiles.map((p: any) => {
+          // Find referral match
+          const matchingRef = referrals?.find(r => r.referred_phone === p.phone);
+          const referredBy = matchingRef?.profiles ? (matchingRef.profiles as any).cp_id : null;
+
+          // Default mock docs since files aren't stored in base tables
+          const mockDocs = [
+            { name: "RERA Certificate.pdf", type: "RERA Copy", url: "#" },
+            { name: "PAN Card Copy.jpg", type: "PAN Card", url: "#" },
+            { name: "Aadhaar Card.pdf", type: "Identity Proof", url: "#" }
+          ];
+
+          // Map enum value to display string casing
+          let statusStr: "Pending" | "Approved" | "Rejected" = "Pending";
+          if (p.status === "approved") statusStr = "Approved";
+          if (p.status === "rejected") statusStr = "Rejected";
+
+          return {
+            id: p.id,
+            name: p.name,
+            agency: p.agency_name || "Independent Broker",
+            phone: p.phone,
+            email: p.email || "No Email",
+            rera: p.rera_number || "No RERA Registered",
+            docs: mockDocs,
+            status: statusStr,
+            rejectionReason: p.rejection_reason,
+            assignedCpId: p.cp_id,
+            referredBy: referredBy
+          };
         });
-        setRequests(merged);
-      } else {
-        setRequests(defaultRequests);
-        localStorage.setItem("agentsapp_verification_requests", JSON.stringify([]));
+        setRequests(mapped);
       }
+    } catch (err) {
+      console.error("Error loading verification requests from database:", err);
+    } finally {
+      setLoading(false);
     }
+  }
+
+  useEffect(() => {
+    loadRequests();
   }, []);
 
   const filteredRequests = requests.filter(r => r.status === activeTab);
 
-  const handleApprove = (id: string, name: string) => {
+  const handleApprove = async (id: string, name: string) => {
     const generatedId = `CP-${Math.floor(1000 + Math.random() * 9000)}`;
-    
-    // Update local state
-    const updatedRequests = requests.map(r => 
-      r.id === id ? { ...r, status: "Approved" as const, assignedCpId: generatedId } : r
-    );
-    setRequests(updatedRequests);
-    setApproveSuccessId(generatedId);
-    setSelectedRequest(null);
+    setLoading(true);
 
-    // Persist to localStorage
-    if (typeof window !== "undefined") {
+    try {
+      // 1. Update Broker status in profiles to approved and assign CP ID
+      const { error: profileError } = await supabase
+        .from("profiles")
+        .update({
+          status: "approved",
+          cp_id: generatedId
+        })
+        .eq("id", id);
+
+      if (profileError) throw profileError;
+
+      // 2. Fetch the profile details to check if they were referred
       const currentReq = requests.find(r => r.id === id);
-      const storedRequests = JSON.parse(localStorage.getItem("agentsapp_verification_requests") || "[]");
-      const isStored = storedRequests.some((r: any) => r.id === id);
       
-      if (isStored) {
-        const newStored = storedRequests.map((r: any) => 
-          r.id === id ? { ...r, status: "Approved", assignedCpId: generatedId } : r
-        );
-        localStorage.setItem("agentsapp_verification_requests", JSON.stringify(newStored));
-      } else {
-        storedRequests.push({ ...currentReq, status: "Approved", assignedCpId: generatedId });
-        localStorage.setItem("agentsapp_verification_requests", JSON.stringify(storedRequests));
-      }
+      // 3. Query referrals table to find match
+      const { data: referral, error: referralGetError } = await supabase
+        .from("referrals")
+        .select("*")
+        .eq("referred_phone", currentReq?.phone)
+        .eq("status", "pending")
+        .single();
 
-      // Check if registration was referred
-      const referrerCode = currentReq?.referredBy;
-      if (referrerCode) {
-        // 1. Update the referrer's referrals list status to Approved and attribute +500 points
-        const storedReferrals = JSON.parse(localStorage.getItem("agentsapp_referral_list") || "[]");
-        const updatedReferrals = storedReferrals.map((refItem: any) => {
-          if (refItem.id === id || refItem.phone === currentReq?.phone) {
-            return { ...refItem, status: "Approved", pointsAwarded: 500 };
-          }
-          return refItem;
-        });
-        localStorage.setItem("agentsapp_referral_list", JSON.stringify(updatedReferrals));
+      if (referral) {
+        // Update referral record in database
+        await supabase
+          .from("referrals")
+          .update({
+            status: "approved",
+            points_awarded: 500
+          })
+          .eq("id", referral.id);
 
-        // 2. Add points to referrer profile
-        const storedProfile = localStorage.getItem("agentsapp_agent_profile");
-        if (storedProfile) {
-          const profile = JSON.parse(storedProfile);
-          if (profile.cpId === referrerCode) {
-            profile.points = (profile.points || 0) + 500;
-            localStorage.setItem("agentsapp_agent_profile", JSON.stringify(profile));
+        // Fetch referrer's current points
+        const { data: referrer, error: referrerError } = await supabase
+          .from("profiles")
+          .select("*")
+          .eq("id", referral.referrer_id)
+          .single();
 
-            // 3. Update the leaderboard rankings
-            const storedLeaderboard = JSON.parse(localStorage.getItem("agentsapp_leaderboard") || "[]");
-            const updatedLeaderboard = storedLeaderboard.map((user: any) => {
-              if (user.name === profile.name) {
-                return { ...user, points: profile.points };
-              }
-              return user;
-            });
-            
-            // Re-sort the leaderboard by points
-            updatedLeaderboard.sort((a: any, b: any) => b.points - a.points);
-            
-            // Re-rank
-            const rankedLeaderboard = updatedLeaderboard.map((user: any, idx: number) => ({
-              ...user,
-              rank: idx + 1
-            }));
-            localStorage.setItem("agentsapp_leaderboard", JSON.stringify(rankedLeaderboard));
-          }
+        if (referrer) {
+          const newPoints = (referrer.points || 0) + 500;
+          
+          // Add 500 XP to referrer points
+          await supabase
+            .from("profiles")
+            .update({ points: newPoints })
+            .eq("id", referrer.id);
         }
       }
-    }
 
-    setTimeout(() => {
-      setApproveSuccessId(null);
-    }, 4500);
+      setApproveSuccessId(generatedId);
+      setSelectedRequest(null);
+      
+      // Reload queue data
+      await loadRequests();
+
+      setTimeout(() => {
+        setApproveSuccessId(null);
+      }, 4500);
+    } catch (err: any) {
+      alert("Error approving Broker: " + err.message);
+      console.error(err);
+    } finally {
+      setLoading(false);
+    }
   };
 
   const handleOpenReject = (req: BrokerRequest) => {
@@ -180,49 +170,41 @@ export default function VerificationQueue() {
     setShowRejectModal(true);
   };
 
-  const handleConfirmReject = (e: React.FormEvent) => {
+  const handleConfirmReject = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedRequest || !rejectReason) return;
+    setLoading(true);
 
-    const updated = requests.map(r => r.id === selectedRequest.id ? { 
-      ...r, 
-      status: "Rejected" as const, 
-      rejectionReason: rejectReason 
-    } : r);
-    setRequests(updated);
+    try {
+      // 1. Update Broker status to rejected in profiles
+      const { error: profileError } = await supabase
+        .from("profiles")
+        .update({
+          status: "rejected",
+          rejection_reason: rejectReason
+        })
+        .eq("id", selectedRequest.id);
 
-    // Persist to localStorage
-    if (typeof window !== "undefined") {
-      const storedRequests = JSON.parse(localStorage.getItem("agentsapp_verification_requests") || "[]");
-      const isStored = storedRequests.some((r: any) => r.id === selectedRequest.id);
+      if (profileError) throw profileError;
+
+      // 2. Update referral record if match exists
+      await supabase
+        .from("referrals")
+        .update({ status: "rejected" })
+        .eq("referred_phone", selectedRequest.phone);
+
+      setShowRejectModal(false);
+      setRejectReason("");
+      setSelectedRequest(null);
       
-      if (isStored) {
-        const newStored = storedRequests.map((r: any) => 
-          r.id === selectedRequest.id ? { ...r, status: "Rejected", rejectionReason: rejectReason } : r
-        );
-        localStorage.setItem("agentsapp_verification_requests", JSON.stringify(newStored));
-      } else {
-        storedRequests.push({ ...selectedRequest, status: "Rejected", rejectionReason: rejectReason });
-        localStorage.setItem("agentsapp_verification_requests", JSON.stringify(storedRequests));
-      }
-
-      // Update referrer's referrals list to Rejected
-      const referrerCode = selectedRequest.referredBy;
-      if (referrerCode) {
-        const storedReferrals = JSON.parse(localStorage.getItem("agentsapp_referral_list") || "[]");
-        const updatedReferrals = storedReferrals.map((refItem: any) => {
-          if (refItem.id === selectedRequest.id || refItem.phone === selectedRequest.phone) {
-            return { ...refItem, status: "Rejected" };
-          }
-          return refItem;
-        });
-        localStorage.setItem("agentsapp_referral_list", JSON.stringify(updatedReferrals));
-      }
+      // Reload queue
+      await loadRequests();
+    } catch (err: any) {
+      alert("Error rejecting broker: " + err.message);
+      console.error(err);
+    } finally {
+      setLoading(false);
     }
-
-    setShowRejectModal(false);
-    setRejectReason("");
-    setSelectedRequest(null);
   };
 
   return (
@@ -252,6 +234,14 @@ export default function VerificationQueue() {
           </button>
         ))}
       </div>
+
+      {/* Loader indicator */}
+      {loading && (
+        <div className="flex items-center space-x-2 text-xs font-bold text-slate-400 uppercase tracking-wider">
+          <Loader2 className="w-4 h-4 animate-spin text-[#25d366]" />
+          <span>Syncing with database...</span>
+        </div>
+      )}
 
       {/* Main content grid */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
@@ -302,7 +292,7 @@ export default function VerificationQueue() {
             </div>
           ))}
 
-          {filteredRequests.length === 0 && (
+          {!loading && filteredRequests.length === 0 && (
             <div className="p-12 text-center bg-white rounded-2xl border border-slate-200 text-slate-400 shadow-sm">
               <ShieldCheck className="w-8 h-8 mx-auto mb-2 text-slate-500" />
               <div className="font-bold">Queue is completely empty!</div>

@@ -4,8 +4,9 @@ import { useState, useEffect } from "react";
 import { 
   Award, Gift, Trophy, Check, 
   HelpCircle, ChevronRight, Sparkles, Copy, MessageSquare,
-  Users, UserCheck, ShieldAlert, ArrowRight, Share2
+  Users, UserCheck, ShieldAlert, ArrowRight, Share2, Loader2
 } from "lucide-react";
+import { supabase } from "@/lib/supabase";
 
 interface Badge {
   name: string;
@@ -42,8 +43,9 @@ interface LeaderboardUser {
 export default function AgentRewards() {
   const [activeTab, setActiveTab] = useState<"rewards" | "refer">("rewards");
   const [copied, setCopied] = useState(false);
+  const [loading, setLoading] = useState(true);
   
-  // Dynamic stats loaded from localStorage
+  // Dynamic stats loaded from Supabase
   const [points, setPoints] = useState(1240);
   const [referralsCount, setReferralsCount] = useState(2);
   const [cpId, setCpId] = useState("CP-8402");
@@ -64,39 +66,82 @@ export default function AgentRewards() {
   ]);
 
   useEffect(() => {
-    if (typeof window !== "undefined") {
-      const storedProfile = localStorage.getItem("agentsapp_agent_profile");
-      if (storedProfile) {
-        const parsed = JSON.parse(storedProfile);
-        setPoints(parsed.points);
-        setReferralsCount(parsed.referralsCount);
-        setCpId(parsed.cpId);
+    async function loadData() {
+      setLoading(true);
+      try {
+        const phone = localStorage.getItem("agentsapp_logged_in_phone") || "+91 98765 43210";
         
-        // Update badges unlock state based on points
-        setBadges(prev => prev.map(badge => {
-          if (badge.name === "Premium Broker" && parsed.points >= 1500) {
-            return { ...badge, unlocked: true };
-          }
-          if (badge.name === "Super Recruiter" && parsed.referralsCount >= 3) {
-            return { ...badge, unlocked: true };
-          }
-          return badge;
-        }));
-      }
+        // 1. Fetch current user profile
+        const { data: profile, error: profileError } = await supabase
+          .from("profiles")
+          .select("*")
+          .eq("phone", phone)
+          .single();
 
-      const storedReferrals = localStorage.getItem("agentsapp_referral_list");
-      if (storedReferrals) {
-        setReferrals(JSON.parse(storedReferrals));
-      }
+        if (profile) {
+          setPoints(profile.points);
+          setReferralsCount(profile.referrals_count);
+          setCpId(profile.cp_id || "PENDING");
 
-      const storedLeaderboard = localStorage.getItem("agentsapp_leaderboard");
-      if (storedLeaderboard) {
-        setLeaderboard(JSON.parse(storedLeaderboard));
+          // Update badges unlock state based on points
+          setBadges(prev => prev.map(badge => {
+            if (badge.name === "Premium Broker" && profile.points >= 1500) {
+              return { ...badge, unlocked: true };
+            }
+            if (badge.name === "Super Recruiter" && profile.referrals_count >= 3) {
+              return { ...badge, unlocked: true };
+            }
+            return badge;
+          }));
+
+          // 2. Fetch referrals made by this profile
+          const { data: refList, error: refError } = await supabase
+            .from("referrals")
+            .select("*")
+            .eq("referrer_id", profile.id);
+
+          if (refList) {
+            const mappedReferrals: Referral[] = refList.map((r: any) => ({
+              id: r.id,
+              name: r.referred_name,
+              phone: r.referred_phone,
+              status: r.status,
+              pointsAwarded: r.points_awarded,
+              date: r.date
+            }));
+            setReferrals(mappedReferrals);
+          }
+        }
+
+        // 3. Fetch leaderboard (all agents sorted by points)
+        const { data: lbList, error: lbError } = await supabase
+          .from("profiles")
+          .select("name, points, location")
+          .eq("role", "agent")
+          .order("points", { ascending: false });
+
+        if (lbList) {
+          const mappedLB: LeaderboardUser[] = lbList.map((user: any, idx: number) => ({
+            rank: idx + 1,
+            name: user.name,
+            points: user.points,
+            location: user.location || "Hyderabad"
+          }));
+          setLeaderboard(mappedLB);
+        }
+      } catch (err) {
+        console.error("Error loading Supabase rewards data:", err);
+      } finally {
+        setLoading(false);
       }
     }
+
+    loadData();
   }, []);
 
-  const referralLink = `http://localhost:3000/?ref=${cpId}`;
+  const referralLink = typeof window !== "undefined" 
+    ? `${window.location.origin}/?ref=${cpId}`
+    : `http://localhost:3000/?ref=${cpId}`;
 
   const handleCopyLink = () => {
     navigator.clipboard.writeText(referralLink);
@@ -115,6 +160,7 @@ export default function AgentRewards() {
       case "active":
         return "bg-emerald-50 text-[#16c47f] border-emerald-200";
       case "pending kyc":
+      case "pending":
         return "bg-amber-50 text-amber-600 border-amber-250";
       case "pending approval":
         return "bg-blue-50 text-blue-600 border-blue-200";
@@ -125,10 +171,18 @@ export default function AgentRewards() {
     }
   };
 
-  // Pre-filled WhatsApp message
   const whatsappShareText = encodeURIComponent(
     `Hey! Join agentsapp—the WhatsApp-native real estate OS for brokers. Register using my link to unlock premium projects and earn rewards points: ${referralLink}`
   );
+
+  if (loading) {
+    return (
+      <div className="flex flex-col items-center justify-center py-20 text-slate-500 font-bold uppercase tracking-wider text-xs space-y-4">
+        <Loader2 className="w-8 h-8 animate-spin text-[#25d366]" />
+        <span>Loading rewards database...</span>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6 text-slate-800">

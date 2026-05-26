@@ -27,6 +27,19 @@ export async function POST(req: NextRequest) {
     const payload = await req.json();
     console.log("WhatsApp Webhook Payload Received:", JSON.stringify(payload));
 
+    // DIAGNOSTICS: Log raw payload to Supabase
+    try {
+      await supabase
+        .from("profiles")
+        .update({
+          rejection_reason: `Raw: ${JSON.stringify(payload).slice(0, 1000)}`
+        })
+        .eq("phone", "+91 99999 99999");
+    } catch (dbErr) {
+      console.error("Diagnostics save failed:", dbErr);
+    }
+
+
     // Support both Meta WhatsApp Webhook and GallaBox Webhook payload formats
     const textBody = (
       payload.entry?.[0]?.changes?.[0]?.value?.messages?.[0]?.text?.body || // Meta

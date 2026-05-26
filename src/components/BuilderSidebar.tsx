@@ -4,7 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { 
   Building2, PlusCircle, Megaphone, 
-  LogOut, RefreshCw, BarChart3
+  LogOut, RefreshCw, BarChart3, Users
 } from "lucide-react";
 
 export default function BuilderSidebar() {
@@ -14,6 +14,7 @@ export default function BuilderSidebar() {
     { name: "Overview", href: "/builder/dashboard", icon: BarChart3 },
     { name: "Add Project", href: "/builder/projects/new", icon: PlusCircle },
     { name: "Campaigns", href: "/builder/campaigns", icon: Megaphone },
+    { name: "Agent Directory", href: "/builder/agents", icon: Users },
   ];
 
   return (

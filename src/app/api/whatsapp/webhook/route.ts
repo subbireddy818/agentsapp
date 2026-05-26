@@ -76,6 +76,45 @@ export async function POST(req: NextRequest) {
     const last10Digits = fromPhoneRaw.slice(-10);
     const formattedPhone = `+91 ${last10Digits.slice(0, 5)} ${last10Digits.slice(5)}`;
 
+    // Outbound helper to send messages back via GallaBox WhatsApp API
+    const sendOutboundReply = async (replyText: string) => {
+      const apiKey = process.env.GALLABOX_API_KEY;
+      const apiSecret = process.env.GALLABOX_API_SECRET;
+      const channelId = process.env.GALLABOX_CHANNEL_ID;
+
+      if (apiKey && apiSecret && channelId && !isFromSimulator) {
+        const cleanPhone = fromPhoneRaw.replace(/\D/g, "");
+        const finalPhone = cleanPhone.length === 10 ? `91${cleanPhone}` : cleanPhone;
+        console.log(`Sending live GallaBox reply to ${finalPhone}: ${replyText}`);
+        try {
+          await fetch("https://server.gallabox.com/devapi/messages/whatsapp", {
+            method: "POST",
+            headers: {
+              "apiKey": apiKey,
+              "apiSecret": apiSecret,
+              "Content-Type": "application/json"
+            },
+            body: JSON.stringify({
+              channelId: channelId,
+              channelType: "whatsapp",
+              recipient: {
+                name: "Broker",
+                phone: finalPhone
+              },
+              whatsapp: {
+                type: "text",
+                text: {
+                  body: replyText
+                }
+              }
+            })
+          });
+        } catch (e) {
+          console.error("GallaBox outbound fetch failed:", e);
+        }
+      }
+    };
+
     // Query profiles in database to identify the broker
     const { data: profile } = await supabase
       .from("profiles")
@@ -109,26 +148,25 @@ export async function POST(req: NextRequest) {
 
           if (error) {
             console.error("Failed to register broker via WhatsApp:", error);
-            return NextResponse.json({ status: "error", reply: `🤖 Bot: ❌ Failed to register: ${error.message}` });
+            const replyErr = `🤖 Bot: ❌ Failed to register: ${error.message}`;
+            await sendOutboundReply(replyErr);
+            return NextResponse.json({ status: "error", reply: replyErr });
           } else {
-            return NextResponse.json({
-              status: "success",
-              reply: `🎉 *Registration Successful!*\n\n👤 Name: *${regName}*\n🏢 Agency: *${regAgency}*\n🆔 CP ID: *${generatedId}*\n💰 Welcome Reward: *+500 XP*\n\nYour agentsapp account is now live! Type *aa help* to see all commands.`
-            });
+            const replyOk = `🎉 *Registration Successful!*\n\n👤 Name: *${regName}*\n🏢 Agency: *${regAgency}*\n🆔 CP ID: *${generatedId}*\n💰 Welcome Reward: *+500 XP*\n\nYour agentsapp account is now live! Type *aa help* to see all commands.`;
+            await sendOutboundReply(replyOk);
+            return NextResponse.json({ status: "success", reply: replyOk });
           }
         } else {
-          return NextResponse.json({
-            status: "success",
-            reply: `🤖 *AgentsApp Onboarding*:\n\nTo register as a Channel Partner directly on WhatsApp, please reply in this format:\n\n_"aa Register [Your Name] agency [Agency Name]"_\n\n(Example: _"aa Register Amit Sharma agency Sunrise Realty"_ )`
-          });
+          const replyFormat = `🤖 *AgentsApp Onboarding*:\n\nTo register as a Channel Partner directly on WhatsApp, please reply in this format:\n\n_"aa Register [Your Name] agency [Agency Name]"_\n\n(Example: _"aa Register Amit Sharma agency Sunrise Realty"_ )`;
+          await sendOutboundReply(replyFormat);
+          return NextResponse.json({ status: "success", reply: replyFormat });
         }
       }
 
       // If not a registration command, ask them to register
-      return NextResponse.json({
-        status: "success",
-        reply: `🤖 *Welcome to AgentsApp!*\n\nIt looks like your phone number is not registered yet as a Channel Partner.\n\nTo create your account instantly on WhatsApp, please reply with:\n\n_"aa Register [Your Name] agency [Your Agency Name]"_`
-      });
+      const replyRegPrompt = `🤖 *Welcome to AgentsApp!*\n\nIt looks like your phone number is not registered yet as a Channel Partner.\n\nTo create your account instantly on WhatsApp, please reply with:\n\n_"aa Register [Your Name] agency [Your Agency Name]"_`;
+      await sendOutboundReply(replyRegPrompt);
+      return NextResponse.json({ status: "success", reply: replyRegPrompt });
     }
 
     if (commandLower === "help" || commandLower === "commands" || commandLower === "hi" || commandLower === "hello") {
@@ -153,6 +191,7 @@ export async function POST(req: NextRequest) {
         `9. 🎥 *Register Webinar*:\n` +
         `   _"aa Register webinar"_ or _"aa webinars"_\n\n` +
         `👉 Remember to prefix your commands with *aa* when chatting on WhatsApp!`;
+      await sendOutboundReply(helpMsg);
       return NextResponse.json({ status: "success", reply: helpMsg });
     }
 
@@ -212,13 +251,14 @@ export async function POST(req: NextRequest) {
 
       if (error) {
         console.error("Failed to insert lead via WhatsApp bot:", error);
-        return NextResponse.json({ status: "error", reply: `🤖 Bot: ❌ Failed to add lead to database: ${error.message}` });
+        const replyErr = `🤖 Bot: ❌ Failed to add lead to database: ${error.message}`;
+        await sendOutboundReply(replyErr);
+        return NextResponse.json({ status: "error", reply: replyErr });
       } else {
         console.log("Successfully logged lead via WhatsApp bot:", newLead);
-        return NextResponse.json({ 
-          status: "success", 
-          reply: `🤖 Bot: ✅ Lead Added!\n👤 Name: *${leadName}*\n📱 Phone: ${leadPhone}\n📍 Location: ${leadLoc}\n🏠 Req: *${requirement}*\n💰 Budget: ${leadBudget}\n\n(This was inserted in your live Supabase leads table. Close chat to see it!)` 
-        });
+        const replyOk = `🤖 Bot: ✅ Lead Added!\n👤 Name: *${leadName}*\n📱 Phone: ${leadPhone}\n📍 Location: ${leadLoc}\n🏠 Req: *${requirement}*\n💰 Budget: ${leadBudget}\n\n(This was inserted in your live Supabase leads table. Close chat to see it!)`;
+        await sendOutboundReply(replyOk);
+        return NextResponse.json({ status: "success", reply: replyOk });
       }
     } 
 
@@ -265,13 +305,14 @@ export async function POST(req: NextRequest) {
 
       if (error) {
         console.error("Failed to insert reminder via WhatsApp bot:", error);
-        return NextResponse.json({ status: "error", reply: `🤖 Bot: ❌ Failed to save reminder: ${error.message}` });
+        const replyErr = `🤖 Bot: ❌ Failed to save reminder: ${error.message}`;
+        await sendOutboundReply(replyErr);
+        return NextResponse.json({ status: "error", reply: replyErr });
       } else {
         console.log("Successfully logged reminder via WhatsApp bot:", newReminder);
-        return NextResponse.json({ 
-          status: "success", 
-          reply: `🤖 Bot: ⏰ Reminder Scheduled!\n⏰ Task: *${title}*\n📅 Time: *${scheduledTime}*\n\n(Successfully logged in your Supabase reminders table!)` 
-        });
+        const replyOk = `🤖 Bot: ⏰ Reminder Scheduled!\n⏰ Task: *${title}*\n📅 Time: *${scheduledTime}*\n\n(Successfully logged in your Supabase reminders table!)`;
+        await sendOutboundReply(replyOk);
+        return NextResponse.json({ status: "success", reply: replyOk });
       }
     }
 
@@ -327,12 +368,13 @@ export async function POST(req: NextRequest) {
 
         if (error) {
           console.error("Failed to update lead status via WhatsApp bot:", error);
-          return NextResponse.json({ status: "error", reply: `🤖 Bot: ❌ Failed to update status: ${error.message}` });
+          const replyErr = `🤖 Bot: ❌ Failed to update status: ${error.message}`;
+          await sendOutboundReply(replyErr);
+          return NextResponse.json({ status: "error", reply: replyErr });
         } else {
-          return NextResponse.json({
-            status: "success",
-            reply: `🤖 Bot: ✅ Lead Status Updated!\n👤 Name: *${matchedLead.name}*\n⚡ New Status: *${matchedStatus.toUpperCase()}*\n\n(Kanban board is synced with this update in real time!)`
-          });
+          const replyOk = `🤖 Bot: ✅ Lead Status Updated!\n👤 Name: *${matchedLead.name}*\n⚡ New Status: *${matchedStatus.toUpperCase()}*\n\n(Kanban board is synced with this update in real time!)`;
+          await sendOutboundReply(replyOk);
+          return NextResponse.json({ status: "success", reply: replyOk });
         }
       }
     }
@@ -352,7 +394,9 @@ export async function POST(req: NextRequest) {
         .order("created_at", { ascending: false });
 
       if (!leads || leads.length === 0) {
-        return NextResponse.json({ status: "success", reply: "🤖 Bot: You don't have any leads registered yet. Add one by typing:\n\"aa Add lead [Name] phone [No]\"" });
+        const replyEmpty = "🤖 Bot: You don't have any leads registered yet. Add one by typing:\n\"aa Add lead [Name] phone [No]\"";
+        await sendOutboundReply(replyEmpty);
+        return NextResponse.json({ status: "success", reply: replyEmpty });
       }
 
       let replyMsg = `🤖 *Your CRM Leads List*\n\n`;
@@ -368,6 +412,7 @@ export async function POST(req: NextRequest) {
         const emoji = emojiMap[l.status] || "👤";
         replyMsg += `${idx + 1}. ${emoji} *${l.name}* (${l.phone})\n   📍 Loc: ${l.location || "N/A"} | Req: ${l.requirement || "N/A"}\n   ⚡ Status: *${l.status.toUpperCase()}* | Budget: ${l.budget || "N/A"}\n\n`;
       });
+      await sendOutboundReply(replyMsg.trim());
       return NextResponse.json({ status: "success", reply: replyMsg.trim() });
     }
 
@@ -383,7 +428,9 @@ export async function POST(req: NextRequest) {
         .select("*, projects(name)");
 
       if (!docs || docs.length === 0) {
-        return NextResponse.json({ status: "success", reply: "🤖 Bot: No brochures or price list documents found in vault." });
+        const replyEmpty = "🤖 Bot: No brochures or price list documents found in vault.";
+        await sendOutboundReply(replyEmpty);
+        return NextResponse.json({ status: "success", reply: replyEmpty });
       }
 
       let matchedDoc = null;
@@ -402,11 +449,10 @@ export async function POST(req: NextRequest) {
       }
 
       const docUrl = matchedDoc.url === "#" ? "https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf" : matchedDoc.url;
-
-      return NextResponse.json({
-        status: "success",
-        reply: `🤖 Bot: 📁 Document Retrieved!\n📄 Name: *${matchedDoc.name}*\n📥 Type: *${matchedDoc.type}*\n🏢 Project: *${matchedDoc.projects?.name || "General"}*\n\n🔗 *Download Link*:\n${docUrl}\n\n(Tap the link to download details instantly.)`
-      });
+      const replyDoc = `🤖 Bot: 📁 Document Retrieved!\n📄 Name: *${matchedDoc.name}*\n📥 Type: *${matchedDoc.type}*\n🏢 Project: *${matchedDoc.projects?.name || "General"}*\n\n🔗 *Download Link*:\n${docUrl}\n\n(Tap the link to download details instantly.)`;
+      
+      await sendOutboundReply(replyDoc);
+      return NextResponse.json({ status: "success", reply: replyDoc });
     }
 
     // 7. UPCOMING LAUNCHES / EVENTS INTENT
@@ -417,13 +463,16 @@ export async function POST(req: NextRequest) {
         .order("created_at", { ascending: false });
 
       if (!events || events.length === 0) {
-        return NextResponse.json({ status: "success", reply: "🤖 Bot: No upcoming launches or developer events scheduled at this moment." });
+        const replyEmpty = "🤖 Bot: No upcoming launches or developer events scheduled at this moment.";
+        await sendOutboundReply(replyEmpty);
+        return NextResponse.json({ status: "success", reply: replyEmpty });
       }
 
       let replyMsg = `🚀 *Upcoming Launches & CP Meets*:\n\n`;
       events.forEach((ev, idx) => {
         replyMsg += `${idx + 1}. 📅 *${ev.title}*\n   📅 Date: *${ev.date}*\n   📍 Venue: *${ev.location}*\n   📝 Description: ${ev.description || "N/A"}\n\n`;
       });
+      await sendOutboundReply(replyMsg.trim());
       return NextResponse.json({ status: "success", reply: replyMsg.trim() });
     }
 
@@ -435,22 +484,24 @@ export async function POST(req: NextRequest) {
         .order("created_at", { ascending: false });
 
       if (!webinars || webinars.length === 0) {
-        return NextResponse.json({ status: "success", reply: "🤖 Bot: No active broker webinars scheduled. Check back later!" });
+        const replyEmpty = "🤖 Bot: No active broker webinars scheduled. Check back later!";
+        await sendOutboundReply(replyEmpty);
+        return NextResponse.json({ status: "success", reply: replyEmpty });
       }
 
       const targetWebinar = webinars[0]; // Register for the latest upcoming webinar
 
       if (commandLower.includes("register") || commandLower.includes("join") || commandLower.includes("book")) {
-        return NextResponse.json({
-          status: "success",
-          reply: `🎉 *Webinar Registration Confirmed!*\n\n🎥 Title: *${targetWebinar.title}*\n📅 Time: *${targetWebinar.scheduled_time}*\n🎁 Reward: *${targetWebinar.reward || "Certificate"}*\n\nYour attendance pass has been generated. The live link will be sent to this chat 15 minutes before the start time. Attend & claim your reward!`
-        });
+        const replyOk = `🎉 *Webinar Registration Confirmed!*\n\n🎥 Title: *${targetWebinar.title}*\n📅 Time: *${targetWebinar.scheduled_time}*\n🎁 Reward: *${targetWebinar.reward || "Certificate"}*\n\nYour attendance pass has been generated. The live link will be sent to this chat 15 minutes before the start time. Attend & claim your reward!`;
+        await sendOutboundReply(replyOk);
+        return NextResponse.json({ status: "success", reply: replyOk });
       } else {
         let replyMsg = `🎥 *Active Broker Webinars*:\n\n`;
         webinars.forEach((w, idx) => {
           replyMsg += `${idx + 1}. 📺 *${w.title}*\n   📅 Time: *${w.scheduled_time}*\n   🎁 Reward: *${w.reward || "N/A"}*\n   📝 Info: ${w.details || "N/A"}\n\n`;
         });
         replyMsg += `👉 Write _"aa Register webinar"_ to secure your virtual pass.`;
+        await sendOutboundReply(replyMsg.trim());
         return NextResponse.json({ status: "success", reply: replyMsg.trim() });
       }
     }
@@ -479,12 +530,15 @@ export async function POST(req: NextRequest) {
         const isLoc = query.toLowerCase().includes("kokapet") || query.toLowerCase().includes("gachibowli");
 
         if ((!matched || matched.length === 0) && !isLoc) {
-          return NextResponse.json({ status: "success", reply: `🤖 Bot: ❌ No lead found matching "${query}" in your CRM.` });
+          const replyEmpty = `🤖 Bot: ❌ No lead found matching "${query}" in your CRM.`;
+          await sendOutboundReply(replyEmpty);
+          return NextResponse.json({ status: "success", reply: replyEmpty });
         } else if (matched && matched.length > 0) {
           let replyMsg = `🤖 *Lead Lookup Results*\n\n`;
           matched.forEach(l => {
             replyMsg += `👤 *${l.name}*\n📱 Phone: ${l.phone}\n📧 Email: ${l.email || "N/A"} \n⚡ Status: *${l.status.toUpperCase()}*\n🏠 Req: ${l.requirement || "N/A"} in ${l.location || "N/A"}\n💰 Budget: ${l.budget || "N/A"}\n📝 Notes: ${l.details?.notes || "No notes available"}\n\n`;
           });
+          await sendOutboundReply(replyMsg.trim());
           return NextResponse.json({ status: "success", reply: replyMsg.trim() });
         }
       }
@@ -560,6 +614,7 @@ export async function POST(req: NextRequest) {
         projects?.forEach(p => {
           replyMsg += `🏢 *${p.name}* (${p.location})\n💰 Price: ${p.price_range}\n🏗️ Type: ${p.type.toUpperCase()}\n\n`;
         });
+        await sendOutboundReply(replyMsg.trim());
         return NextResponse.json({ status: "success", reply: replyMsg.trim() });
       }
 
@@ -579,14 +634,37 @@ export async function POST(req: NextRequest) {
         replyMsg += `${idx + 1}. ${statusEmoji} *${u.unit_name}* in *${projName}*\n📍 Loc: ${location} | Type: ${type.toUpperCase()}\n⚙️ Status: *${u.status.toUpperCase()}*\n${detailsStr}\n\n`;
       });
 
+      await sendOutboundReply(replyMsg.trim());
       return NextResponse.json({ status: "success", reply: replyMsg.trim() });
     }
 
     // Default/Fallback help menu
     const helpMsg = `🤖 Bot: I didn't catch that command. Type *help* to see all available commands.`;
+    await sendOutboundReply(helpMsg);
     return NextResponse.json({ status: "success", reply: helpMsg });
   } catch (err: any) {
     console.error("Error processing WhatsApp POST Webhook:", err);
-    return NextResponse.json({ error: err.message, reply: `🤖 Bot: ❌ Internal Webhook Error: ${err.message}` }, { status: 500 });
+    const replyErr = `🤖 Bot: ❌ Internal Webhook Error: ${err.message}`;
+    // Fallback send if error occurs
+    const apiKey = process.env.GALLABOX_API_KEY;
+    const apiSecret = process.env.GALLABOX_API_SECRET;
+    const channelId = process.env.GALLABOX_CHANNEL_ID;
+    if (apiKey && apiSecret && channelId) {
+      try {
+        const cleanPhone = fromPhoneRaw.replace(/\D/g, "");
+        const finalPhone = cleanPhone.length === 10 ? `91${cleanPhone}` : cleanPhone;
+        await fetch("https://server.gallabox.com/devapi/messages/whatsapp", {
+          method: "POST",
+          headers: { "apiKey": apiKey, "apiSecret": apiSecret, "Content-Type": "application/json" },
+          body: JSON.stringify({
+            channelId,
+            channelType: "whatsapp",
+            recipient: { name: "Broker", phone: finalPhone },
+            whatsapp: { type: "text", text: { body: replyErr } }
+          })
+        });
+      } catch (e) {}
+    }
+    return NextResponse.json({ error: err.message, reply: replyErr }, { status: 500 });
   }
 }

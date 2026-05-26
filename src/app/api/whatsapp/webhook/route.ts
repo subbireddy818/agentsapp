@@ -50,22 +50,6 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ status: "ignored", message: "Missing body or phone" });
     }
 
-    // Format phone number to match the database profile representation: "+91 98765 43210"
-    const last10Digits = fromPhoneRaw.slice(-10);
-    const formattedPhone = `+91 ${last10Digits.slice(0, 5)} ${last10Digits.slice(5)}`;
-
-    // Query profiles in database to identify the broker
-    const { data: profile } = await supabase
-      .from("profiles")
-      .select("*")
-      .eq("phone", formattedPhone)
-      .single();
-
-    if (!profile) {
-      console.log(`No registered broker profile found for: ${formattedPhone}`);
-      return NextResponse.json({ status: "error", message: "User phone not registered" });
-    }
-
     const lowerText = textBody.toLowerCase();
 
     // Determine if the message has our specific "aa" prefix or is from the sandbox simulator
@@ -88,7 +72,65 @@ export async function POST(req: NextRequest) {
 
     const commandLower = commandText.toLowerCase();
 
-    // 1. HELP / WELCOME INTENT
+    // Format phone number to match the database profile representation: "+91 98765 43210"
+    const last10Digits = fromPhoneRaw.slice(-10);
+    const formattedPhone = `+91 ${last10Digits.slice(0, 5)} ${last10Digits.slice(5)}`;
+
+    // Query profiles in database to identify the broker
+    const { data: profile } = await supabase
+      .from("profiles")
+      .select("*")
+      .eq("phone", formattedPhone)
+      .single();
+
+    if (!profile) {
+      // Check if they want to register
+      if (commandLower.startsWith("register") || commandLower.includes("register")) {
+        const match = commandText.match(/register\s+([a-zA-Z\s]+)\s+agency\s+(.*)/i);
+        if (match) {
+          const regName = match[1].trim();
+          const regAgency = match[2].trim();
+          const generatedId = `CP-${Math.floor(1000 + Math.random() * 9000)}`;
+
+          const { data: newProfile, error } = await supabase
+            .from("profiles")
+            .insert([{
+              phone: formattedPhone,
+              name: regName,
+              agency_name: regAgency,
+              role: "agent",
+              status: "approved", // Auto-approved for frictionless demo
+              cp_id: generatedId,
+              points: 500,
+              referrals_count: 0
+            }])
+            .select()
+            .single();
+
+          if (error) {
+            console.error("Failed to register broker via WhatsApp:", error);
+            return NextResponse.json({ status: "error", reply: `🤖 Bot: ❌ Failed to register: ${error.message}` });
+          } else {
+            return NextResponse.json({
+              status: "success",
+              reply: `🎉 *Registration Successful!*\n\n👤 Name: *${regName}*\n🏢 Agency: *${regAgency}*\n🆔 CP ID: *${generatedId}*\n💰 Welcome Reward: *+500 XP*\n\nYour agentsapp account is now live! Type *aa help* to see all commands.`
+            });
+          }
+        } else {
+          return NextResponse.json({
+            status: "success",
+            reply: `🤖 *AgentsApp Onboarding*:\n\nTo register as a Channel Partner directly on WhatsApp, please reply in this format:\n\n_"aa Register [Your Name] agency [Agency Name]"_\n\n(Example: _"aa Register Amit Sharma agency Sunrise Realty"_ )`
+          });
+        }
+      }
+
+      // If not a registration command, ask them to register
+      return NextResponse.json({
+        status: "success",
+        reply: `🤖 *Welcome to AgentsApp!*\n\nIt looks like your phone number is not registered yet as a Channel Partner.\n\nTo create your account instantly on WhatsApp, please reply with:\n\n_"aa Register [Your Name] agency [Your Agency Name]"_`
+      });
+    }
+
     if (commandLower === "help" || commandLower === "commands" || commandLower === "hi" || commandLower === "hello") {
       const helpMsg = `🤖 *AgentsApp WhatsApp Bot Menu*\n\n` +
         `Manage your real estate CRM with simple commands:\n\n` +

@@ -105,7 +105,7 @@ export async function POST(req: NextRequest) {
         const finalPhone = cleanPhone.length === 10 ? `91${cleanPhone}` : cleanPhone;
         console.log(`Sending live GallaBox reply to ${finalPhone}: ${replyText}`);
         try {
-          await fetch("https://server.gallabox.com/devapi/messages/whatsapp", {
+          const res = await fetch("https://server.gallabox.com/devapi/messages/whatsapp", {
             method: "POST",
             headers: {
               "apiKey": apiKey,
@@ -127,8 +127,25 @@ export async function POST(req: NextRequest) {
               }
             })
           });
-        } catch (e) {
+
+          const resData = await res.json();
+          console.log(`GallaBox reply status: ${res.status}`, JSON.stringify(resData));
+
+          // Update diagnostics with GallaBox response
+          await supabase
+            .from("profiles")
+            .update({
+              rejection_reason: `Webhook received | GallaBox Send Status: ${res.status} | Resp: ${JSON.stringify(resData).slice(0, 400)}`
+            })
+            .eq("phone", "+91 99999 99999");
+        } catch (e: any) {
           console.error("GallaBox outbound fetch failed:", e);
+          await supabase
+            .from("profiles")
+            .update({
+              rejection_reason: `Webhook received | GallaBox Send Error: ${e.message}`
+            })
+            .eq("phone", "+91 99999 99999");
         }
       }
     };

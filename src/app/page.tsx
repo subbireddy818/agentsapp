@@ -1,7 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { useState, useEffect } from "react";
+import { useState, useEffect, Suspense } from "react";
+import { useSearchParams } from "next/navigation";
 import { 
   Check, ArrowRight, Sparkles, Smartphone, 
   Users, Building, MessageSquare, Calendar, 
@@ -9,8 +10,13 @@ import {
   Layers, Volume2, Gift, CheckCircle2, ChevronRight 
 } from "lucide-react";
 
-export default function LandingPage() {
+function LandingContent() {
   const [activeChatMsg, setActiveChatMsg] = useState(0);
+  const searchParams = useSearchParams();
+  const refCode = searchParams.get("ref");
+
+  const loginUrl = refCode ? `/auth/login?ref=${refCode}` : `/auth/login`;
+  const loginBuilderUrl = refCode ? `/auth/login?role=builder&ref=${refCode}` : `/auth/login?role=builder`;
 
   const simulatedChat = [
     { sender: "user", text: "Add lead Ramesh looking for 3BHK Kokapet under 2cr" },
@@ -37,7 +43,14 @@ export default function LandingPage() {
 
   return (
     <div className="min-h-screen bg-[#f8fafc] text-[#0f172a] flex flex-col justify-between font-sans antialiased">
-      
+      {/* Dynamic welcome referral banner */}
+      {refCode && (
+        <div className="bg-[#25d366] text-white text-center py-2 px-4 text-xs font-bold flex items-center justify-center space-x-2 shrink-0 animate-in slide-in-from-top-10 duration-500 shadow-sm border-b border-[#25d366]/20">
+          <Sparkles className="w-3.5 h-3.5 text-white animate-pulse" />
+          <span>Special Invite: You've been referred by Partner {refCode}! Get premium features +500 points on onboarding.</span>
+        </div>
+      )}
+
       {/* 1. Navbar */}
       <header className="glass-panel sticky top-0 z-50 px-6 py-4 flex items-center justify-between border-b border-slate-200/80 bg-white/80">
         <div className="flex items-center space-x-2">
@@ -60,10 +73,10 @@ export default function LandingPage() {
         </nav>
 
         <div className="flex items-center space-x-4">
-          <Link href="/auth/login" className="text-xs font-bold text-[#64748b] hover:text-[#16c47f] transition uppercase tracking-wider">
+          <Link href={loginUrl} className="text-xs font-bold text-[#64748b] hover:text-[#16c47f] transition uppercase tracking-wider">
             Login
           </Link>
-          <Link href="/auth/login" className="glow-button px-4 py-2 bg-[#25d366] hover:bg-[#16c47f] text-white font-bold text-xs rounded-lg transition-all flex items-center space-x-1 shadow-sm">
+          <Link href={loginUrl} className="glow-button px-4 py-2 bg-[#25d366] hover:bg-[#16c47f] text-white font-bold text-xs rounded-lg transition-all flex items-center space-x-1 shadow-sm">
             <span>Start Free</span>
             <ArrowRight className="w-3.5 h-3.5" />
           </Link>
@@ -88,11 +101,11 @@ export default function LandingPage() {
           </p>
 
           <div className="flex flex-col sm:flex-row gap-4 pt-2">
-            <Link href="/auth/login" className="glow-button px-7 py-3.5 bg-[#25d366] hover:bg-[#16c47f] text-white font-bold text-sm rounded-xl transition flex items-center justify-center space-x-2">
+            <Link href={loginUrl} className="glow-button px-7 py-3.5 bg-[#25d366] hover:bg-[#16c47f] text-white font-bold text-sm rounded-xl transition flex items-center justify-center space-x-2">
               <span>Start Free Now</span>
               <ArrowRight className="w-4 h-4" />
             </Link>
-            <Link href="/auth/login?role=builder" className="px-7 py-3.5 bg-white border border-slate-200 hover:border-slate-300 text-[#0f172a] font-bold text-sm rounded-xl transition flex items-center justify-center">
+            <Link href={loginBuilderUrl} className="px-7 py-3.5 bg-white border border-slate-200 hover:border-slate-300 text-[#0f172a] font-bold text-sm rounded-xl transition flex items-center justify-center">
               <span>Book Builder Demo</span>
             </Link>
           </div>
@@ -408,7 +421,7 @@ export default function LandingPage() {
                 <div>· Standard support channel</div>
               </div>
             </div>
-            <Link href="/auth/login?role=builder" className="w-full py-2 bg-slate-900 text-white font-bold text-xs rounded-lg text-center hover:bg-slate-800 transition">
+            <Link href={loginBuilderUrl} className="w-full py-2 bg-slate-900 text-white font-bold text-xs rounded-lg text-center hover:bg-slate-800 transition">
               Get Started
             </Link>
           </div>
@@ -426,7 +439,7 @@ export default function LandingPage() {
                 <div>· Priority Slack support</div>
               </div>
             </div>
-            <Link href="/auth/login?role=builder" className="w-full py-2 bg-[#25d366] text-white font-bold text-xs rounded-lg text-center hover:bg-[#16c47f] transition">
+            <Link href={loginBuilderUrl} className="w-full py-2 bg-[#25d366] text-white font-bold text-xs rounded-lg text-center hover:bg-[#16c47f] transition">
               Get Started
             </Link>
           </div>
@@ -441,7 +454,7 @@ export default function LandingPage() {
                 <div>· Dedicated account manager</div>
               </div>
             </div>
-            <Link href="/auth/login?role=builder" className="w-full py-2 bg-slate-900 text-white font-bold text-xs rounded-lg text-center hover:bg-slate-800 transition">
+            <Link href={loginBuilderUrl} className="w-full py-2 bg-slate-900 text-white font-bold text-xs rounded-lg text-center hover:bg-slate-800 transition">
               Contact Sales
             </Link>
           </div>
@@ -456,10 +469,10 @@ export default function LandingPage() {
             Empower your brokers with WhatsApp-first tools and run spam-free direct developer campaigns instantly.
           </p>
           <div className="flex justify-center space-x-4">
-            <Link href="/auth/login" className="glow-button px-6 py-3 bg-[#25d366] hover:bg-[#16c47f] text-white font-bold text-xs rounded-xl shadow-lg transition">
+            <Link href={loginUrl} className="glow-button px-6 py-3 bg-[#25d366] hover:bg-[#16c47f] text-white font-bold text-xs rounded-xl shadow-lg transition">
               Start Free (For Agents)
             </Link>
-            <Link href="/auth/login?role=builder" className="px-6 py-3 bg-slate-950 text-white font-bold text-xs rounded-xl hover:bg-slate-800 transition">
+            <Link href={loginBuilderUrl} className="px-6 py-3 bg-slate-950 text-white font-bold text-xs rounded-xl hover:bg-slate-800 transition">
               Get Builder Suite
             </Link>
           </div>
@@ -478,5 +491,13 @@ export default function LandingPage() {
         </div>
       </footer>
     </div>
+  );
+}
+
+export default function LandingPage() {
+  return (
+    <Suspense fallback={<div className="min-h-screen bg-[#f8fafc] flex items-center justify-center font-sans antialiased text-xs text-slate-500 uppercase font-bold tracking-wider">Loading agentsapp...</div>}>
+      <LandingContent />
+    </Suspense>
   );
 }
